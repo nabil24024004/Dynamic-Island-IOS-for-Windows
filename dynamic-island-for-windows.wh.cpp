@@ -164,6 +164,9 @@ A fluid, living overlay inspired by Apple's Dynamic Island, bringing a beautiful
 #include <uiautomation.h>
 #include <winhttp.h>
 #pragma comment(lib, "winhttp.lib")
+#include <pdh.h>
+#include <pdhmsg.h>
+#pragma comment(lib, "pdh.lib")
 
 #include <algorithm>
 #include <array>
@@ -1870,6 +1873,46 @@ ULONGLONG FileTimeToUInt64(FILETIME ft) {
     return value.QuadPart;
 }
 
+static PDH_HQUERY g_gpuQuery = NULL;
+static PDH_HCOUNTER g_gpuCounter = NULL;
+
+static void InitGpuQuery() {
+    if (g_gpuQuery == NULL) {
+        if (PdhOpenQueryW(NULL, 0, &g_gpuQuery) == ERROR_SUCCESS) {
+            PdhAddEnglishCounterW(g_gpuQuery, L"\\GPU Engine(*)\\Utilization Percentage", 0, &g_gpuCounter);
+            PdhCollectQueryData(g_gpuQuery);
+        }
+    }
+}
+
+static int GetGpuUsage() {
+    InitGpuQuery();
+    if (!g_gpuQuery || !g_gpuCounter) return 0;
+    
+    PdhCollectQueryData(g_gpuQuery);
+    
+    DWORD bufferSize = 0;
+    DWORD itemCount = 0;
+    PdhGetFormattedCounterArrayW(g_gpuCounter, PDH_FMT_DOUBLE, &bufferSize, &itemCount, NULL);
+    
+    if (bufferSize > 0) {
+        std::vector<BYTE> buffer(bufferSize);
+        PDH_FMT_COUNTERVALUE_ITEM_W* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data());
+        
+        if (PdhGetFormattedCounterArrayW(g_gpuCounter, PDH_FMT_DOUBLE, &bufferSize, &itemCount, items) == ERROR_SUCCESS) {
+            double total = 0;
+            for (DWORD i = 0; i < itemCount; i++) {
+                if (items[i].szName && wcsstr(items[i].szName, L"engtype_3D")) {
+                    total += items[i].FmtValue.doubleValue;
+                }
+            }
+            return ClampInt(static_cast<int>(total), 0, 100);
+        }
+    }
+    return 0;
+}
+
+
 void UpdateSystemSnapshot() {
     SystemSnapshot next;
     {
@@ -1877,6 +1920,8 @@ void UpdateSystemSnapshot() {
         next = g_state.system;
         next.charging = g_state.system.charging;
     }
+
+    next.gpuPercent = GetGpuUsage();
 
     MEMORYSTATUSEX memory = {};
     memory.dwLength = sizeof(memory);
