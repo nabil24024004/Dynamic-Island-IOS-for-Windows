@@ -4655,7 +4655,7 @@ DWORD WINAPI RenderThreadProc(void*) {
         GetCursorPos(&cursor);
         const bool hover = PtInRect(&windowRect, cursor) != FALSE;
 
-        if (primary.kind == IslandKind::Idle && pinned) {
+        if (primary.kind == IslandKind::Idle && (pinned || (hover && g_settings.alwaysShowClock))) {
             primary.width = 336.0f * g_settings.sizeScale;
             primary.height = 58.0f * g_settings.sizeScale;
         }
