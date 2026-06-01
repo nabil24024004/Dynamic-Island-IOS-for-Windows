@@ -143,6 +143,7 @@ A fluid, living overlay inspired by Apple's Dynamic Island, bringing a beautiful
 #include <mmreg.h>
 #include <objbase.h>
 #include <wrl/client.h>
+#include <uiautomation.h>
 
 #include <algorithm>
 #include <array>
@@ -1964,6 +1965,59 @@ void CaptureShellNotification(HWND hwnd) {
         g_state.notification = std::move(notification);
     }
     TriggerNudge();
+
+    // Spawn a background thread to extract the full rich text body of the toast using UI Automation.
+    // Modern Windows Toasts often only provide the App Name via GetWindowTextW, leaving the body hidden in the XAML tree.
+    std::thread([hwnd]() {
+        Sleep(100); // Give the UWP XAML tree a moment to fully construct
+        HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        if (SUCCEEDED(hr)) {
+            IUIAutomation* uia = nullptr;
+            hr = CoCreateInstance(__uuidof(CUIAutomation), nullptr, CLSCTX_INPROC_SERVER, __uuidof(IUIAutomation), (void**)&uia);
+            if (SUCCEEDED(hr) && uia) {
+                IUIAutomationElement* windowEl = nullptr;
+                if (SUCCEEDED(uia->ElementFromHandle(hwnd, &windowEl)) && windowEl) {
+                    IUIAutomationCondition* cond = nullptr;
+                    uia->CreateTrueCondition(&cond);
+                    IUIAutomationElementArray* elements = nullptr;
+                    if (SUCCEEDED(windowEl->FindAll(TreeScope_Descendants, cond, &elements)) && elements) {
+                        int count = 0;
+                        elements->get_Length(&count);
+                        std::wstring fullText;
+                        for (int i = 0; i < count; ++i) {
+                            IUIAutomationElement* el = nullptr;
+                            if (SUCCEEDED(elements->GetElement(i, &el)) && el) {
+                                BSTR name = nullptr;
+                                el->get_CurrentName(&name);
+                                if (name && wcslen(name) > 0) {
+                                    std::wstring chunk = name;
+                                    // Skip generic screen-reader labels often found in toasts
+                                    if (chunk != L"Notification" && chunk != L"New notification") {
+                                        if (!fullText.empty()) fullText += L"  -  ";
+                                        fullText += chunk;
+                                    }
+                                }
+                                if (name) SysFreeString(name);
+                                el->Release();
+                            }
+                        }
+                        elements->Release();
+                        
+                        if (!fullText.empty()) {
+                            std::lock_guard lock(g_stateMutex);
+                            if (g_state.notification.active) {
+                                g_state.notification.title = fullText;
+                            }
+                        }
+                    }
+                    if (cond) cond->Release();
+                    windowEl->Release();
+                }
+                uia->Release();
+            }
+            CoUninitialize();
+        }
+    }).detach();
 }
 
 void CaptureClipboard(HWND hwnd) {
@@ -2386,19 +2440,22 @@ class Renderer {
 
         const float top = kRenderPadY + nudge;
         const float left = kRenderPadX;
-        if (secondary) {
-            const float gap = 12.0f * settings.sizeScale;
-            DrawPill(state, settings, primary,
-                     D2D1::RectF(left, top, left + primary.width, top + primary.height),
-                     scale, now);
-            DrawPill(state, settings, *secondary,
-                     D2D1::RectF(left + primary.width + gap, top,
-                                  left + primary.width + gap + secondary->width,
-                                  top + secondary->height),
-                     scale, now);
-        } else {
-            DrawPill(state, settings, primary,
-                     D2D1::RectF(left, top, left + width, top + height), scale, now);
+        
+        if (width >= 2.0f && height >= 2.0f) {
+            if (secondary) {
+                const float gap = 12.0f * settings.sizeScale;
+                DrawPill(state, settings, primary,
+                         D2D1::RectF(left, top, left + primary.width, top + primary.height),
+                         scale, now);
+                DrawPill(state, settings, *secondary,
+                         D2D1::RectF(left + primary.width + gap, top,
+                                      left + primary.width + gap + secondary->width,
+                                      top + secondary->height),
+                         scale, now);
+            } else {
+                DrawPill(state, settings, primary,
+                         D2D1::RectF(left, top, left + width, top + height), scale, now);
+            }
         }
 
         hr = target_->EndDraw();
@@ -3754,6 +3811,7 @@ class Renderer {
     }
 
     void DrawClipboard(const SharedState& state, D2D1_RECT_F rect) {
+        if (rect.bottom - rect.top < 40.0f || rect.right - rect.left < 100.0f) return;
         const double now = NowSeconds();
         const float ttl = 2.5f;
         const float remaining = Clamp(static_cast<float>(state.clipboard.expiresAt - now), 0.0f, ttl);
@@ -3821,6 +3879,7 @@ class Renderer {
     }
 
     void DrawNotification(const SharedState& state, D2D1_RECT_F rect) {
+        if (rect.bottom - rect.top < 48.0f || rect.right - rect.left < 120.0f) return;
         const double now = NowSeconds();
         const float ttl = 4.0f;
         const float remaining = Clamp(static_cast<float>(state.notification.expiresAt - now), 0.0f, ttl);
@@ -3876,6 +3935,7 @@ class Renderer {
     }
 
     void DrawVolume(const SharedState& state, D2D1_RECT_F rect) {
+        if (rect.bottom - rect.top < 24.0f || rect.right - rect.left < 140.0f) return;
         const bool muted = state.volume.muted || state.volume.percent == 0;
         const float cy = (rect.top + rect.bottom) * 0.5f;
         const float badgeSz = (rect.bottom - rect.top) - 16.0f;
@@ -3927,6 +3987,7 @@ class Renderer {
     }
 
     void DrawCapsLock(const SharedState& state, D2D1_RECT_F rect) {
+        if (rect.bottom - rect.top < 24.0f || rect.right - rect.left < 110.0f) return;
         const float cy = (rect.top + rect.bottom) * 0.5f;
         const float badgeSz = (rect.bottom - rect.top) - 16.0f;
         D2D1_RECT_F badge = D2D1::RectF(rect.left + 14, cy - badgeSz * 0.5f,
@@ -3988,6 +4049,7 @@ class Renderer {
     }
 
     void DrawDevice(const SharedState& state, D2D1_RECT_F rect) {
+        if (rect.bottom - rect.top < 24.0f || rect.right - rect.left < 100.0f) return;
         const float cy = (rect.top + rect.bottom) * 0.5f;
         const bool connected = (state.device.eventType == DeviceEventType::Connected);
 
@@ -4111,6 +4173,7 @@ class Renderer {
     }
 
     void DrawBattery(const SharedState& state, D2D1_RECT_F rect) {
+        if (rect.bottom - rect.top < 24.0f || rect.right - rect.left < 140.0f) return;
         const float cy = (rect.top + rect.bottom) * 0.5f;
         const float badgeSz = (rect.bottom - rect.top) - 16.0f;
         D2D1_RECT_F badge = D2D1::RectF(rect.left + 14, cy - badgeSz * 0.5f,
