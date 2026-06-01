@@ -6,7 +6,7 @@
 // @author          Himanshu
 // @github          https://github.com/devcode90
 // @include         windhawk.exe
-// @compilerOptions -lole32 -loleaut32 -lshcore -ld2d1 -ldwrite -ldwmapi -lgdi32 -luser32 -lshell32 -lruntimeobject -lwindowscodecs -lavrt -lsetupapi -lwinhttp
+// @compilerOptions -lole32 -loleaut32 -lshcore -ld2d1 -ldwrite -ldwmapi -lgdi32 -luser32 -lshell32 -lruntimeobject -lwindowscodecs -lavrt -lsetupapi -lwinhttp -lpdh
 // @license         MIT
 // ==/WindhawkMod==
 
@@ -5028,15 +5028,20 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 const float height = static_cast<float>(clientRect.bottom - clientRect.top);
                 const float width = static_cast<float>(clientRect.right - clientRect.left);
 
-                if (mediaActive && height > 60.0f) {
-                    const float cy = 136.0f;
-                    if (yPos > cy - 30.0f && yPos < cy + 30.0f) {
+                if (mediaActive && height > 60.0f && (g_idleTab % 3) == 0) {
+                    float totalScale = (GetDpiForWindow(hwnd) / 96.0f) * g_settings.sizeScale;
+                    float cx = width / 2.0f;
+                    float cy = height / 2.0f;
+                    
+                    float unX = (xPos - cx) / totalScale;
+                    float unY = (yPos - cy) / totalScale;
+
+                    if (unY > 56.0f - 30.0f && unY < 56.0f + 30.0f) {
                         // Check button clicks in expanded media view
-                        const float cx = width * 0.5f;
                         int cmd = -1;
-                        if (xPos > cx - 84.0f && xPos < cx - 44.0f) cmd = 0; // Prev
-                        else if (xPos > cx - 24.0f && xPos < cx + 24.0f) cmd = 1; // Play/Pause
-                        else if (xPos > cx + 44.0f && xPos < cx + 84.0f) cmd = 2; // Next
+                        if (unX > -84.0f && unX < -44.0f) cmd = 0; // Prev
+                        else if (unX > -24.0f && unX < 24.0f) cmd = 1; // Play/Pause
+                        else if (unX > 44.0f && unX < 84.0f) cmd = 2; // Next
 
                         if (cmd != -1) {
                             std::thread([cmd]() {
