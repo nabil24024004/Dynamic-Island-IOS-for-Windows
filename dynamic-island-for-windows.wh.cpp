@@ -77,6 +77,12 @@ The Dynamic Island intelligently expands to display context-aware dashboards. Yo
       - top-left: Top Left
       - top-right: Top Right
       - bottom-center: Bottom Center
+  - OffsetX: 0
+    $name: Offset X
+    $description: Adjust the horizontal position (in pixels). Positive values move it right, negative values move it left.
+  - OffsetY: 0
+    $name: Offset Y
+    $description: Adjust the vertical position (in pixels). Positive values move it down, negative values move it up.
   - SizeScale: '1.0'
     $name: Size scale
     $description: Makes the entire island and its contents larger or smaller.
@@ -265,6 +271,8 @@ enum class AccentMode {
 
 struct Settings {
     Position position = Position::TopCenter;
+    int offsetX = 0;
+    int offsetY = 0;
     float sizeScale = 1.0f;
     AccentMode accentMode = AccentMode::Auto;
     D2D1_COLOR_F customAccent = D2D1::ColorF(0x4cc9f0);
@@ -454,6 +462,7 @@ std::atomic<uint64_t> g_artGenerationCounter = 0;
 
 HWND g_hwnd = nullptr;
 HANDLE g_stopEvent = nullptr;
+HANDLE g_settingsChangedEvent = nullptr;
 HANDLE g_renderThread = nullptr;
 HANDLE g_mediaThread = nullptr;
 HANDLE g_audioThread = nullptr;
@@ -625,6 +634,8 @@ void LoadSettings() {
     next.alwaysShowClock = Wh_GetIntSetting(L"Modules.AlwaysShowClock") != 0;
     next.alwaysOnTop = Wh_GetIntSetting(L"Appearance.AlwaysOnTop") != 0;
     next.autoDpiScale = Wh_GetIntSetting(L"Appearance.AutoDpiScale") != 0;
+    next.offsetX = Wh_GetIntSetting(L"Appearance.OffsetX");
+    next.offsetY = Wh_GetIntSetting(L"Appearance.OffsetY");
 
     const int localW11Style = Wh_GetIntValue(L"W11StyleOverride", -1);
     next.w11Style = localW11Style >= 0 ? (localW11Style != 0) : (Wh_GetIntSetting(L"Appearance.W11Style") != 0);
@@ -655,8 +666,12 @@ void LoadSettings() {
                                                D2D1::ColorF(0.533f, 0.533f, 0.533f, 1.0f));
     }
 
+    bool cityChanged = next.weatherCity != g_settings.weatherCity;
     g_settings = next;
     g_layoutDirty = true;
+    if (cityChanged && g_settingsChangedEvent) {
+        SetEvent(g_settingsChangedEvent);
+    }
 }
 
 void EnableBlurBehind(HWND hwnd) {
@@ -692,7 +707,7 @@ void PositionOverlayWindow(HWND hwnd, int width, int height) {
             break;
         case Position::BottomCenter:
             x = work.left + (work.right - work.left - width) / 2;
-            y = work.bottom - height - 8;
+            y = work.bottom - height - 40;
             break;
         case Position::TopCenter:
         default:
@@ -700,6 +715,8 @@ void PositionOverlayWindow(HWND hwnd, int width, int height) {
     }
 
     HWND zOrder = g_settings.alwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST;
+    x += g_settings.offsetX;
+    y += g_settings.offsetY;
     SetWindowPos(hwnd, zOrder, x, y, width, height,
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
 }
@@ -1749,7 +1766,11 @@ DWORD WINAPI WeatherThreadProc(void*) {
             }
         }
 
-        WaitForSingleObject(g_stopEvent, 15 * 60 * 1000);
+        HANDLE events[] = {g_stopEvent, g_settingsChangedEvent};
+        DWORD waitResult = WaitForMultipleObjects(2, events, FALSE, 15 * 60 * 1000);
+        if (waitResult == WAIT_OBJECT_0) {
+            break;
+        }
     }
     return 0;
 }
@@ -5497,7 +5518,8 @@ DWORD WINAPI RenderThreadProc(void*) {
 
 bool StartThreads() {
     g_stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (!g_stopEvent) {
+    g_settingsChangedEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!g_stopEvent || !g_settingsChangedEvent) {
         return false;
     }
 
@@ -5539,6 +5561,10 @@ void StopThreads() {
     if (g_stopEvent) {
         CloseHandle(g_stopEvent);
         g_stopEvent = nullptr;
+    }
+    if (g_settingsChangedEvent) {
+        CloseHandle(g_settingsChangedEvent);
+        g_settingsChangedEvent = nullptr;
     }
 
     g_running = false;
