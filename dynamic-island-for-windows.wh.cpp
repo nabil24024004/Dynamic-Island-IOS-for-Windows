@@ -50,6 +50,7 @@ The Dynamic Island intelligently expands to display context-aware dashboards. Yo
 - **Hover & Scroll:** Hover over the island to seamlessly expand it. Use your mouse scroll wheel to swipe between the Media, Calendar, and Weather tabs.
 - **Right-Click Menu:** Right-click the island to access Theme presets, Transparency settings, and to pin the island open.
 - **Windhawk Settings:** Visit the Mod Settings tab to change the island's Position, Size Scale, Animation Speed, and toggle specific modules. You can also perfectly align the island using the new `Offset X` and `Offset Y` settings, and even select exactly which monitor the island should appear on (including a brand new "Follow Mouse" mode!).
+- **Notifications:** To use the notification module, you need to add `explorer.exe` to the process inclusion list in the Advanced tab of the mod settings and restart the mod.
 
 ---
 
@@ -1296,6 +1297,85 @@ BitmapPixels FindMediaSourceIcon(const std::wstring& sourceAppUserModelId) {
     return pixels;
 }
 
+struct FindAppIconData {
+    const std::wstring* targetName;
+    HWND bestHwnd = nullptr;
+    std::unordered_map<DWORD, std::wstring> pidToProcessName;
+};
+
+BOOL CALLBACK FindAppIconWindowProc(HWND hwnd, LPARAM lParam) {
+    auto* d = reinterpret_cast<FindAppIconData*>(lParam);
+    if (!IsWindowVisible(hwnd)) {
+        return TRUE;
+    }
+
+    if (hwnd == g_hwnd) {
+        return TRUE;
+    }
+
+    // 1. Fast path: Check window title first (lightweight check without opening process handles)
+    wchar_t title[128] = {};
+    GetWindowTextW(hwnd, title, ARRAYSIZE(title));
+    std::wstring titleLower = ToLowerCopy(title);
+    if (!titleLower.empty() && titleLower.find(*d->targetName) != std::wstring::npos) {
+        d->bestHwnd = hwnd;
+        return FALSE; // Found via title, stop enumeration
+    }
+
+    // 2. Slow path fallback: Check process executable name
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (!pid) {
+        return TRUE;
+    }
+
+    std::wstring baseNoExe;
+    auto it = d->pidToProcessName.find(pid);
+    if (it != d->pidToProcessName.end()) {
+        baseNoExe = it->second;
+    } else {
+        std::wstring image;
+        if (ProcessImageNameForPid(pid, &image)) {
+            std::wstring base = ToLowerCopy(BaseNameFromPath(image));
+            baseNoExe = base;
+            if (baseNoExe.size() > 4 && baseNoExe.substr(baseNoExe.size() - 4) == L".exe") {
+                baseNoExe = baseNoExe.substr(0, baseNoExe.size() - 4);
+            }
+            d->pidToProcessName[pid] = baseNoExe;
+        } else {
+            d->pidToProcessName[pid] = L"";
+        }
+    }
+
+    if (!baseNoExe.empty()) {
+        if (baseNoExe.find(*d->targetName) != std::wstring::npos ||
+            d->targetName->find(baseNoExe) != std::wstring::npos) {
+            d->bestHwnd = hwnd;
+            return FALSE; // Found via process name, stop enumeration
+        }
+    }
+
+    return TRUE;
+}
+
+BitmapPixels FindAppIconByName(const std::wstring& appName, UINT size) {
+    BitmapPixels pixels;
+    if (appName.empty()) {
+        return pixels;
+    }
+
+    const std::wstring appNameLower = ToLowerCopy(appName);
+    FindAppIconData data;
+    data.targetName = &appNameLower;
+
+    EnumWindows(FindAppIconWindowProc, reinterpret_cast<LPARAM>(&data));
+
+    if (data.bestHwnd) {
+        pixels = GetWindowIconPixels(data.bestHwnd, size);
+    }
+    return pixels;
+}
+
 std::vector<uint8_t> ReadWinRtStreamBytes(
     const winrt::Windows::Storage::Streams::IRandomAccessStreamReference& reference) {
     std::vector<uint8_t> bytes;
@@ -1491,65 +1571,81 @@ DWORD WINAPI NotificationThreadProc(void*) {
         }
 
         while (WaitForSingleObject(g_stopEvent, 0) == WAIT_TIMEOUT) {
-            auto notifications = listener.GetNotificationsAsync(NotificationKinds::Toast).get();
-            for (uint32_t i = 0; i < notifications.Size(); ++i) {
-                auto userNotification = notifications.GetAt(i);
-                const uint32_t id = userNotification.Id();
-                if (id <= lastSeenId) {
-                    continue;
-                }
-
-                NotificationSnapshot snapshot;
-                snapshot.active = true;
-                snapshot.expiresAt = NowSeconds() + 4.0;
-                auto appInfo = userNotification.AppInfo();
-                auto displayInfo = appInfo.DisplayInfo();
-                snapshot.app = displayInfo.DisplayName().c_str();
-                try {
-                    auto logo = displayInfo.GetLogo({32.0f, 32.0f});
-                    std::vector<uint8_t> logoBytes = ReadWinRtStreamBytes(logo);
-                    if (!logoBytes.empty()) {
-                        DecodeImageBytesToPixels(logoBytes, &snapshot.icon);
+            try {
+                auto notifications = listener.GetNotificationsAsync(NotificationKinds::Toast).get();
+                for (uint32_t i = 0; i < notifications.Size(); ++i) {
+                    auto userNotification = notifications.GetAt(i);
+                    const uint32_t id = userNotification.Id();
+                    if (id <= lastSeenId) {
+                        continue;
                     }
-                } catch (...) {
-                }
 
-                auto notification = userNotification.Notification();
-                auto binding = notification.Visual().GetBinding(KnownNotificationBindings::ToastGeneric());
-                if (binding) {
-                    auto textElements = binding.GetTextElements();
-                    if (textElements.Size() > 0) {
-                        snapshot.title = textElements.GetAt(0).Text().c_str();
+                    NotificationSnapshot snapshot;
+                    snapshot.active = true;
+                    snapshot.expiresAt = NowSeconds() + 4.0;
+                    auto appInfo = userNotification.AppInfo();
+                    auto displayInfo = appInfo.DisplayInfo();
+                    snapshot.app = displayInfo.DisplayName().c_str();
+                    try {
+                        auto logo = displayInfo.GetLogo({32.0f, 32.0f});
+                        std::vector<uint8_t> logoBytes = ReadWinRtStreamBytes(logo);
+                        if (!logoBytes.empty()) {
+                            DecodeImageBytesToPixels(logoBytes, &snapshot.icon);
+                        }
+                    } catch (...) {
                     }
-                    if (textElements.Size() > 1) {
-                        snapshot.body = textElements.GetAt(1).Text().c_str();
+
+                    if (snapshot.icon.bgra.empty() && !snapshot.app.empty()) {
+                        snapshot.icon = FindAppIconByName(snapshot.app, 64);
                     }
-                }
 
-                if (snapshot.title.empty()) {
-                    snapshot.title = snapshot.app.empty() ? L"New notification" : snapshot.app;
-                }
-                if (!snapshot.body.empty()) {
-                    snapshot.title += L" - " + snapshot.body;
-                }
-                if (snapshot.title.size() > 120) {
-                    snapshot.title.resize(120);
-                    snapshot.title += L"...";
-                }
+                    auto notification = userNotification.Notification();
+                    auto binding = notification.Visual().GetBinding(KnownNotificationBindings::ToastGeneric());
+                    if (binding) {
+                        auto textElements = binding.GetTextElements();
+                        if (textElements.Size() > 0) {
+                            snapshot.title = textElements.GetAt(0).Text().c_str();
+                        }
+                        if (textElements.Size() > 1) {
+                            snapshot.body = textElements.GetAt(1).Text().c_str();
+                        }
+                    }
 
-                {
-                    std::lock_guard lock(g_stateMutex);
-                    g_state.notification = std::move(snapshot);
+                    if (snapshot.title.empty()) {
+                        snapshot.title = snapshot.app.empty() ? L"New notification" : snapshot.app;
+                    }
+                    if (!snapshot.body.empty()) {
+                        snapshot.title += L" - " + snapshot.body;
+                    }
+                    if (snapshot.title.size() > 120) {
+                        snapshot.title.resize(120);
+                        snapshot.title += L"...";
+                    }
+
+                    {
+                        std::lock_guard lock(g_stateMutex);
+                        g_state.notification = std::move(snapshot);
+                    }
+                    TriggerNudge();
+                    lastSeenId = id;
                 }
-                TriggerNudge();
-                lastSeenId = id;
+            } catch (const winrt::hresult_error& ex) {
+                const HRESULT hr = ex.to_abi();
+                Wh_Log(L"NotificationThreadProc loop WinRT error: %s (0x%08X)", ex.message().c_str(), hr);
+                if (hr == E_NOTIMPL || hr == E_ACCESSDENIED || hr == REGDB_E_CLASSNOTREG) {
+                    Wh_Log(L"NotificationThreadProc: Fatal/Unsupported WinRT context. Exiting WinRT notification listener thread.");
+                    break;
+                }
+            } catch (...) {
+                Wh_Log(L"NotificationThreadProc loop unknown exception.");
             }
 
             WaitForSingleObject(g_stopEvent, 1000);
         }
+    } catch (const winrt::hresult_error& ex) {
+        Wh_Log(L"NotificationThreadProc initialization WinRT error: %s (0x%08X). Falling back to shell hook.", ex.message().c_str(), ex.to_abi());
     } catch (...) {
-        // Silently fall back to shell-hook notification system.
-        // WinRT UserNotificationListener fails if the process lacks a Package Identity (which windhawk.exe does).
+        Wh_Log(L"NotificationThreadProc initialization unknown exception. Falling back to shell hook.");
     }
 
     winrt::uninit_apartment();
@@ -1656,7 +1752,10 @@ void PushAudioChunks(BYTE* data, UINT32 frames, WAVEFORMATEX* format) {
 std::string HttpGet(const wchar_t* host, const wchar_t* path, bool https = true) {
     std::string response;
     HINTERNET hSession = WinHttpOpen(L"DynamicIsland/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return response;
+    if (!hSession) {
+        Wh_Log(L"Weather HttpGet: WinHttpOpen failed with error %lu", GetLastError());
+        return response;
+    }
 
     HINTERNET hConnect = WinHttpConnect(hSession, host, https ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT, 0);
     if (hConnect) {
@@ -1672,13 +1771,21 @@ std::string HttpGet(const wchar_t* host, const wchar_t* path, bool https = true)
                         if (WinHttpReadData(hRequest, buffer.data(), size, &downloaded)) {
                             buffer[downloaded] = '\0';
                             response.append(buffer.data());
+                        } else {
+                            Wh_Log(L"Weather HttpGet: WinHttpReadData failed with error %lu", GetLastError());
                         }
                     }
                 } while (size > 0);
+            } else {
+                Wh_Log(L"Weather HttpGet: WinHttpSendRequest/ReceiveResponse failed with error %lu", GetLastError());
             }
             WinHttpCloseHandle(hRequest);
+        } else {
+            Wh_Log(L"Weather HttpGet: WinHttpOpenRequest failed with error %lu", GetLastError());
         }
         WinHttpCloseHandle(hConnect);
+    } else {
+        Wh_Log(L"Weather HttpGet: WinHttpConnect failed with error %lu", GetLastError());
     }
     WinHttpCloseHandle(hSession);
     return response;
@@ -1706,9 +1813,15 @@ DWORD WINAPI WeatherThreadProc(void*) {
             url = L"/" + urlName + L"?format=j1";
         }
 
+        Wh_Log(L"Weather: Requesting weather from wttr.in/host: wttr.in, path: %s", url.c_str());
         std::string wRes = HttpGet(L"wttr.in", url.c_str(), true);
+        if (wRes.empty()) {
+            Wh_Log(L"Weather: HTTPS request failed, retrying over plain HTTP...");
+            wRes = HttpGet(L"wttr.in", url.c_str(), false);
+        }
         
         if (!wRes.empty()) {
+            Wh_Log(L"Weather: Received response from wttr.in (size: %zu bytes)", wRes.size());
             float temp = 0.0f;
             int code = 0;
             std::wstring desc = L"";
@@ -1794,6 +1907,12 @@ DWORD WINAPI WeatherThreadProc(void*) {
                 ParseStringField("\"winddir16Point\"", windDir);
                 ParseStringField("\"humidity\"", humidity);
                 ParseStringField("\"FeelsLikeC\"", feelsLike);
+
+                std::wstring finalCity = cityOverride.empty() ? cityLabel : cityOverride;
+                Wh_Log(L"Weather parsed success: city=%s, temp=%.1fC, feelsLike=%sC, humidity=%s%%, desc=%s",
+                       finalCity.c_str(), temp, feelsLike.c_str(), humidity.c_str(), desc.c_str());
+            } else {
+                Wh_Log(L"Weather: Failed to find \"current_condition\" in response.");
             }
             
             {
@@ -1810,6 +1929,8 @@ DWORD WINAPI WeatherThreadProc(void*) {
                 g_state.weather.feelsLike = feelsLike;
                 g_state.weather.lastUpdated = NowSeconds();
             }
+        } else {
+            Wh_Log(L"Weather: HttpGet returned empty response.");
         }
 
         HANDLE events[] = {g_stopEvent, g_settingsChangedEvent};
@@ -2319,6 +2440,12 @@ void CaptureShellNotification(HWND hwnd) {
             IUIAutomation* uia = nullptr;
             hr = CoCreateInstance(__uuidof(CUIAutomation), nullptr, CLSCTX_INPROC_SERVER, __uuidof(IUIAutomation), (void**)&uia);
             if (SUCCEEDED(hr) && uia) {
+                IUIAutomation2* uia2 = nullptr;
+                if (SUCCEEDED(uia->QueryInterface(__uuidof(IUIAutomation2), (void**)&uia2)) && uia2) {
+                    uia2->put_TransactionTimeout(500);
+                    uia2->put_ConnectionTimeout(500);
+                    uia2->Release();
+                }
                 IUIAutomationElement* windowEl = nullptr;
                 if (SUCCEEDED(uia->ElementFromHandle(hwnd, &windowEl)) && windowEl) {
                     IUIAutomationCondition* cond = nullptr;
@@ -2327,6 +2454,7 @@ void CaptureShellNotification(HWND hwnd) {
                     if (SUCCEEDED(windowEl->FindAll(TreeScope_Descendants, cond, &elements)) && elements) {
                         int count = 0;
                         elements->get_Length(&count);
+                        std::wstring appName;
                         std::wstring fullText;
                         for (int i = 0; i < count; ++i) {
                             IUIAutomationElement* el = nullptr;
@@ -2337,8 +2465,12 @@ void CaptureShellNotification(HWND hwnd) {
                                     std::wstring chunk = name;
                                     // Skip generic screen-reader labels often found in toasts
                                     if (chunk != L"Notification" && chunk != L"New notification") {
-                                        if (!fullText.empty()) fullText += L"  -  ";
-                                        fullText += chunk;
+                                        if (appName.empty()) {
+                                            appName = chunk;
+                                        } else {
+                                            if (!fullText.empty()) fullText += L"  -  ";
+                                            fullText += chunk;
+                                        }
                                     }
                                 }
                                 if (name) SysFreeString(name);
@@ -2347,9 +2479,23 @@ void CaptureShellNotification(HWND hwnd) {
                         }
                         elements->Release();
                         
+                        if (fullText.empty() && !appName.empty()) {
+                            fullText = appName;
+                            appName = L"Notification";
+                        }
+                        
                         if (!fullText.empty()) {
                             std::lock_guard lock(g_stateMutex);
                             if (g_state.notification.active) {
+                                if (!appName.empty()) {
+                                    g_state.notification.app = appName;
+                                    if (appName != L"Notification") {
+                                        BitmapPixels resolvedIcon = FindAppIconByName(appName, 64);
+                                        if (!resolvedIcon.bgra.empty()) {
+                                            g_state.notification.icon = std::move(resolvedIcon);
+                                        }
+                                    }
+                                }
                                 g_state.notification.title = fullText;
                             }
                         }
@@ -4506,6 +4652,20 @@ class Renderer {
         if (!state.notification.icon.bgra.empty()) {
             DrawRoundedBitmapPixels(state.notification.icon, badge, br,
                                     notificationIconBitmap_, notificationIconGeneration_, 1.0f);
+
+            // Draw a red dot (badge) at the top-right of the app icon
+            ComPtr<ID2D1SolidColorBrush> badgeColor;
+            target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 0.23f, 0.18f, 1.0f), &badgeColor);
+            
+            const float dotR = iconSz * 0.13f;
+            const float dotX = badge.right - dotR * 0.5f;
+            const float dotY = badge.top + dotR * 0.5f;
+            
+            target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY), dotR, dotR), badgeColor.Get());
+
+            ComPtr<ID2D1SolidColorBrush> badgeBorder;
+            target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.95f), &badgeBorder);
+            target_->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY), dotR, dotR), badgeBorder.Get(), 0.9f);
         } else {
             DrawNotificationFallbackIcon(
                 D2D1::Point2F((badge.left + badge.right) * 0.5f, cy), iconSz * 0.38f);

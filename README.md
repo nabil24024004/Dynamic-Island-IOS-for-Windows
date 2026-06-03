@@ -49,6 +49,7 @@ Tweak the mod easily from the **Windhawk settings panel**:
 - **Colors:** Match it to your album art automatically, use system colors, or pick your own.
 - **Speed:** Set animations to Slow, Normal, or Fast.
 - **Modules:** Turn on or off the parts you want (Media, Clipboard, Battery, etc.).
+- **Process Inclusion (for Notifications):** To use the notification module, you must add `explorer.exe` to the process inclusion list under the **Advanced** tab of the mod settings in Windhawk, then restart the mod.
 
 ---
 
