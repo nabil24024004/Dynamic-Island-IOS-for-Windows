@@ -5392,6 +5392,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     if (height > 45.0f && xPos > width - 30.0f) {
                         // Clicked on the right edge scroll area in Media
                         g_idleTab = (g_idleTab + 1) % 3;
+                        g_layoutDirty = true;
                     } else {
                         OpenRelevantApp();
                     }
@@ -5399,6 +5400,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     if (!kinds.empty() && kinds[0] == IslandKind::Idle && height > 45.0f) {
                         if (xPos < width / 2.0f) g_idleTab = (g_idleTab - 1 + 2) % 2;
                         else g_idleTab = (g_idleTab + 1) % 2;
+                        g_layoutDirty = true;
                     } else {
                         HandleStatusClickAtPoint(hwnd, lParam);
                     }
@@ -5417,7 +5419,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_MOUSEWHEEL: {
             static ULONGLONG lastScrollTime = 0;
             ULONGLONG now = GetTickCount64();
-            if (now - lastScrollTime < 300) return 0; // 300ms debounce
+            if (now - lastScrollTime < 150) return 0; // 150ms debounce
             lastScrollTime = now;
 
             bool mediaActive = false;
@@ -5427,8 +5429,13 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             int tabCount = mediaActive ? 3 : 2;
             int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-            if (delta > 0) g_idleTab = (g_idleTab - 1 + tabCount) % tabCount;
-            else if (delta < 0) g_idleTab = (g_idleTab + 1) % tabCount;
+            if (delta > 0) {
+                if (g_idleTab > 0) g_idleTab--;
+            } else if (delta < 0) {
+                if (g_idleTab < tabCount - 1) g_idleTab++;
+            }
+            
+            g_layoutDirty = true;
             return 0;
         }
 

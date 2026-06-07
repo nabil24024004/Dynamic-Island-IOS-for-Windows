@@ -1,9 +1,7 @@
-fix: robust handling for SMTC AppUserModelId media clicks
+fix: resolve mouse wheel scroll delay and looping
 
-- Replaced basic ShellExecuteW with ShellExecuteExW using SEE_MASK_FLAG_NO_UI to suppress native Windows error dialogs on failed launches.
-- Added robust path parsing to handle absolute paths injected directly by SMTC (common for desktop browsers like Chrome and Brave).
-- Implemented heuristic to intelligently strip ' (x86)' from dead paths, automatically locating the executable if the user upgraded from a 32-bit to a 64-bit browser installation.
-- Gracefully abort SMTC launches if the underlying executable truly no longer exists, preventing broken Windows App Paths registry keys from triggering 'The specified path does not exist' dialogs when clicking fading media sessions of closed browsers.
+- Reduced mouse wheel debounce timer from 300ms to 150ms for snappier response.
+- Injected missing layout invalidation (g_layoutDirty = true) during tab changes (scroll and click) to guarantee instantaneous, zero-latency redraws instead of waiting for natural tick updates.
+- Removed modulo wrapping (looping) from mouse wheel navigation so users reliably stop at the first or last tabs instead of unexpectedly wrapping around.
 
-Fixes https://github.com/devcode90/Dynamic-Island-for-Windows/issues/3
-Fixes https://github.com/devcode90/Dynamic-Island-for-Windows/issues/17
+Fixes https://github.com/devcode90/Dynamic-Island-for-Windows/issues/15
