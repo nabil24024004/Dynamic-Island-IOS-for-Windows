@@ -115,6 +115,9 @@ The Dynamic Island intelligently expands to display context-aware dashboards. Yo
   - AlwaysOnTop: true
     $name: Always on top
     $description: Keeps the island above all other windows. Turn this off if it blocks other apps.
+  - ExpandOnHover: true
+    $name: Expand on hover
+    $description: Expand the island automatically when hovered. If disabled, click to expand.
   - AnimationSpeed: normal
     $name: Animation speed
     $description: How fast the island expands and collapses.
@@ -301,6 +304,7 @@ struct Settings {
     std::wstring weatherCity;
     bool alwaysShowClock = true;
     bool alwaysOnTop = true;
+    bool expandOnHover = true;
     bool autoDpiScale = true;
     bool w11Style = false;
     // Color customization
@@ -646,6 +650,8 @@ void LoadSettings() {
     next.weatherCity = GetStringSettingCopy(L"Modules.WeatherCity");
     next.alwaysShowClock = Wh_GetIntSetting(L"Modules.AlwaysShowClock") != 0;
     next.alwaysOnTop = Wh_GetIntSetting(L"Appearance.AlwaysOnTop") != 0;
+    const int localExpandOnHover = Wh_GetIntValue(L"ExpandOnHoverOverride", -1);
+    next.expandOnHover = localExpandOnHover >= 0 ? (localExpandOnHover != 0) : (Wh_GetIntSetting(L"Appearance.ExpandOnHover") != 0);
     next.autoDpiScale = Wh_GetIntSetting(L"Appearance.AutoDpiScale") != 0;
     next.offsetX = Wh_GetIntSetting(L"Appearance.OffsetX");
     next.offsetY = Wh_GetIntSetting(L"Appearance.OffsetY");
@@ -2792,6 +2798,10 @@ void ShowContextMenu(HWND hwnd, POINT screenPoint) {
                           ? Wh_GetIntValue(L"W11StyleOverride", 0)
                           : Wh_GetIntSetting(L"Appearance.W11Style");
     AppendMenuW(menu, MF_STRING, 10, activeW11 ? L"Use iPhone Pill Style" : L"Use Windows 11 Flyout Style");
+    const int activeExpandOnHover = Wh_GetIntValue(L"ExpandOnHoverOverride", -1) >= 0
+                          ? Wh_GetIntValue(L"ExpandOnHoverOverride", 0)
+                          : Wh_GetIntSetting(L"Appearance.ExpandOnHover");
+    AppendMenuW(menu, MF_STRING, 11, activeExpandOnHover ? L"Expand on Click" : L"Expand on Hover");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, 4, L"Transparency 100%");
     AppendMenuW(menu, MF_STRING, 5, L"Transparency 85%");
@@ -2861,6 +2871,15 @@ void ShowContextMenu(HWND hwnd, POINT screenPoint) {
                                   ? Wh_GetIntValue(L"W11StyleOverride", 0)
                                   : Wh_GetIntSetting(L"Appearance.W11Style");
             Wh_SetIntValue(L"W11StyleOverride", activeW11Val ? 0 : 1);
+            LoadSettings();
+            g_layoutDirty = true;
+            break;
+        }
+        case 11: {
+            const int activeExpandOnHover = Wh_GetIntValue(L"ExpandOnHoverOverride", -1) >= 0
+                                  ? Wh_GetIntValue(L"ExpandOnHoverOverride", 0)
+                                  : Wh_GetIntSetting(L"Appearance.ExpandOnHover");
+            Wh_SetIntValue(L"ExpandOnHoverOverride", activeExpandOnHover ? 0 : 1);
             LoadSettings();
             g_layoutDirty = true;
             break;
@@ -5218,7 +5237,7 @@ std::vector<IslandKind> ChooseActivities(const SharedState& state, const Setting
     if (settings.progress && state.progress.active) {
         activities.push_back(IslandKind::Progress);
     }
-    if (settings.media && state.media.available && state.media.playing) {
+    if (settings.media && state.media.available) {
         activities.push_back(IslandKind::Media);
     }
 
@@ -5230,6 +5249,7 @@ std::vector<IslandKind> ChooseActivities(const SharedState& state, const Setting
 }
 
 constexpr UINT WM_APP_CAPSLOCK = WM_APP + 0x444;
+std::atomic<bool> g_clickExpanded{false};
 HHOOK g_keyboardHook = nullptr;
 HANDLE g_keyboardThread = nullptr;
 DWORD g_keyboardThreadId = 0;
@@ -5338,6 +5358,14 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             {
                 int xPos = GET_X_LPARAM(lParam);
                 int yPos = GET_Y_LPARAM(lParam);
+                
+                bool expanded = Wh_GetIntValue(L"PinnedExpanded", 0) != 0 || g_clickExpanded.load();
+                if (!g_settings.expandOnHover && !expanded) {
+                    g_clickExpanded = true;
+                    g_layoutDirty = true;
+                    return 0; // consumed click to expand
+                }
+                
                 bool mediaActive = false;
                 std::vector<IslandKind> kinds;
                 {
@@ -5605,9 +5633,17 @@ DWORD WINAPI RenderThreadProc(void*) {
         POINT cursor = {};
         GetCursorPos(&cursor);
         const bool hover = PtInRect(&windowRect, cursor) != FALSE;
+        
+        bool needsRender = false;
+        
+        if (!hover && g_clickExpanded.load()) {
+            g_clickExpanded = false;
+            needsRender = true;
+        }
+        bool isHoverExpanded = g_settings.expandOnHover ? hover : (hover && g_clickExpanded.load());
 
         bool privacyActive = snapshot.system.micActive || snapshot.system.cameraActive;
-        if (primary.kind == IslandKind::Idle && (pinned || (hover && (g_settings.alwaysShowClock || privacyActive)))) {
+        if (primary.kind == IslandKind::Idle && (pinned || (isHoverExpanded && (g_settings.alwaysShowClock || privacyActive)))) {
             primary.width = 380.0f * g_settings.sizeScale;
             primary.height = 184.0f * g_settings.sizeScale;
         }
@@ -5618,7 +5654,7 @@ DWORD WINAPI RenderThreadProc(void*) {
         }
         if (primary.kind == IslandKind::Media) {
             bool recentArtChange = (NowSeconds() - g_state.media.artChangedAt) < 4.0;
-            if (hover || pinned || recentArtChange) {
+            if (isHoverExpanded || pinned || recentArtChange) {
                 primary.width = 380.0f * g_settings.sizeScale;
                 primary.height = 184.0f * g_settings.sizeScale;
             }
@@ -5684,8 +5720,6 @@ DWORD WINAPI RenderThreadProc(void*) {
         }
 
         SetClickThrough(hwnd, primary.kind == IslandKind::Idle && !hover && !pinned);
-
-        bool needsRender = false;
 
         // Check if animating structurally
         if (std::abs(widthSpring.velocity) > 0.01f || std::abs(widthSpring.target - widthSpring.value) > 0.01f ||
