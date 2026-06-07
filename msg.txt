@@ -1,7 +1,8 @@
-fix: resolve mouse wheel scroll delay and looping
+fix: prevent widget disappearance on desktop click and Win+D
 
-- Reduced mouse wheel debounce timer from 300ms to 150ms for snappier response.
-- Injected missing layout invalidation (g_layoutDirty = true) during tab changes (scroll and click) to guarantee instantaneous, zero-latency redraws instead of waiting for natural tick updates.
-- Removed modulo wrapping (looping) from mouse wheel navigation so users reliably stop at the first or last tabs instead of unexpectedly wrapping around.
+- Refactored 'Always on top' toggle behavior to formally modify the island's window ownership (GWLP_HWNDPARENT) instead of relying on generic Z-order hacks.
+- When 'Always on top' is disabled, the island is now structurally owned by 'Progman' (the Windows Desktop process).
+- This inherently anchors the island directly above the wallpaper, completely preventing it from disappearing or being covered when the desktop is clicked.
+- Because the island is now owned by the desktop, Windows natively exempts it from the 'Show Desktop' (Win+D) command, making it behave flawlessly as a true bottom-layer widget.
 
-Fixes https://github.com/devcode90/Dynamic-Island-for-Windows/issues/15
+Fixes https://github.com/devcode90/Dynamic-Island-for-Windows/issues/16

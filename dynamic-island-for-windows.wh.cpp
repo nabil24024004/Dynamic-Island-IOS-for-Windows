@@ -762,6 +762,17 @@ void PositionOverlayWindow(HWND hwnd, int width, int height) {
     }
 
     HWND zOrder = g_settings.alwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST;
+    
+    // Manage owner window to firmly anchor to desktop when alwaysOnTop is false
+    if (g_settings.alwaysOnTop) {
+        SetWindowLongPtr(hwnd, GWLP_HWNDPARENT, 0);
+    } else {
+        HWND hProgman = FindWindowW(L"Progman", nullptr);
+        if (hProgman) {
+            SetWindowLongPtr(hwnd, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(hProgman));
+        }
+    }
+
     x += g_settings.offsetX;
     y += g_settings.offsetY;
     SetWindowPos(hwnd, zOrder, x, y, width, height,
@@ -5316,6 +5327,8 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 CaptureClipboard(hwnd);
             }
             return 0;
+
+
 
         case WM_APP_LAYOUT_CHANGED:
             g_layoutDirty = true;
