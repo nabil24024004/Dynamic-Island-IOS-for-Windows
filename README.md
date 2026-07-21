@@ -27,7 +27,7 @@ A smooth, interactive overlay for your desktop, inspired by Apple's Dynamic Isla
 ## ✨ What it does
 
 - 🟢 **Privacy Dots:** See an orange dot when your mic is on and a green dot for your camera.
-- 🎵 **Media Player:** Live album art, audio waveforms, and playback controls.
+- 🎵 **Media Player:** Full-pill centered background album art with a smooth readability gradient, an elegant audio-reactive waving scrubber waveform (flat-bottomed waving track tapering cleanly to the knob), larger high-contrast white text, and playback controls with soft drop shadows.
 - 📅 **Dashboards:** Scroll your mouse wheel to easily switch between Media, Calendar, and live Weather (via wttr.in).
 - 🔒 **Key Alerts:** Get quick visual popups when you hit Caps Lock or Num Lock.
 - 🔋 **Battery & Power:** Fluid animations when you plug in, unplug, or hit low battery.
@@ -37,6 +37,7 @@ A smooth, interactive overlay for your desktop, inspired by Apple's Dynamic Isla
 - 📊 **Game Overlay:** Real-time FPS, CPU, GPU, and RAM stats built right in.
 - 📋 **Clipboard & Notifications:** Instantly preview what you just copied or see your latest Windows notifications.
 - 🎨 **Themes:** Pick from OLED Black, Midnight Blue, Deep Purple, or pick your own hex color.
+- 👻 **Ctrl+Hover Click-Through:** Hold `Ctrl` while hovering the island to make it see-through and click-through, so you can interact with windows underneath.
 
 ---
 

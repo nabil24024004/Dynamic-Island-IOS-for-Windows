@@ -2,9 +2,9 @@
 // @id              dynamic-island-for-windows
 // @name            Dynamic Island for Windows
 // @description     A living, breathing pill overlay inspired by iPhone's Dynamic Island. Reacts to media, downloads, clipboard, battery, and more.
-// @version         1.1.0
-// @author          Himanshu
-// @github          https://github.com/devcode90
+// @version         2.0.0
+// @author          Azwad Abrar
+// @github          https://github.com/nabil2402404
 // @include         windhawk.exe
 // @compilerOptions -lole32 -loleaut32 -lshcore -ld2d1 -ldwrite -ldwmapi -lgdi32 -luser32 -lshell32 -lruntimeobject -lwindowscodecs -lavrt -lsetupapi -lwinhttp -lpdh
 // @license         MIT
@@ -16,7 +16,7 @@
 
 A fluid, living overlay inspired by Apple's Dynamic Island, bringing a beautiful, highly-responsive UI to your Windows desktop. Built natively with hardware-accelerated Direct2D rendering for a buttery-smooth 60 FPS experience.
 
-![Dynamic Island Preview](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/Full-preview.png)
+![Dynamic Island Preview](https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/Full-preview.png)
 
 ---
 
@@ -26,28 +26,31 @@ The Dynamic Island intelligently expands to display context-aware dashboards. Yo
 
 | Module | Description | Preview |
 | :--- | :--- | :--- |
-| **Media Player** | Shows live album art, track details, audio waveforms, and full playback controls. | ![Media](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/media.png) |
-| **Calendar** | A sleek, perfectly aligned monthly calendar that highlights the current date. | ![Calendar](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/calender.png) |
-| **Weather** | Real-time weather stats powered by wttr.in, including wind speed, humidity, and "feels like" temperature. | ![Weather](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/weather.png) |
-| **Game Overlay** | Real-time FPS, CPU, GPU, and RAM utilization overlays tailored for gamers. | ![Gamebar](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/gamebar.png) |
-| **Idle View** | A minimal dashboard with your battery status, digital clock, and sleek pagination dots. | ![Idle](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/idle.png) |
-| **Camera Privacy** | Shows a green dot when an app is actively using your webcam. | ![Camera](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/camera-detected.png) |
-| **Mic Privacy** | Shows an orange dot when an app is actively using your microphone. | ![Mic](https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/mic-detected.png) |
+| **Media Player** | Shows live full-pill background album art, track details, audio-reactive waving scrubber, and playback controls. | ![Media](https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/media.png) |
+| **Calendar** | A sleek, perfectly aligned monthly calendar that highlights the current date. | ![Calendar](https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/calender.png) |
+| **Weather** | Real-time weather stats powered by wttr.in, including wind speed, humidity, and "feels like" temperature. | ![Weather](https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/weather.png) |
+| **Game Overlay** | Real-time FPS, CPU, GPU, and RAM utilization overlays tailored for gamers. | ![Gamebar](https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/gamebar.png) |
+| **Idle View** | A minimal dashboard with your battery status, digital clock, and sleek pagination dots. | ![Idle](https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/idle.png) |
+| **Camera Privacy** | Shows a green dot when an app is actively using your webcam. | ![Camera](https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/camera-detected.png) |
+| **Mic Privacy** | Shows an orange dot when an app is actively using your microphone. | ![Mic](https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/mic-detected.png) |
 
 ---
 
 ## ✨ Core Features
 
+- **Sleek Audio Visualizer & Background Art:** Center-cropped background album art covers the entire pill with a smooth fade, paired with an elegant audio-reactive waving visualizer scrubber that curves only on the played portion and tapers cleanly to the progress knob. Texts and playback controls are rendered in high-contrast white with drop shadows for flawless readability.
 - **Hardware Privacy Indicators:** A pulsing orange dot appears when your microphone is active, and a green dot when your camera is in use. Rate-limited polling ensures absolutely no CPU drain.
 - **High-Res Clipboard & Notifications:** Instantly see what you copied or your latest Windows notifications, featuring crisp, high-fidelity 64px app icons extracted directly from system executables.
 - **Dynamic Fluid Animations:** Fully smooth resizing and splitting when multiple events happen at once (e.g., media playing while you copy text or receive a notification).
 - **Customizable Aesthetics:** Switch between sleek OLED Black, Dark Gray, Midnight Blue, and Deep Purple themes from the right-click menu, or use the settings to dial in your exact hex colors.
+- **Ctrl+Hover Click-Through:** Hold `Ctrl` and hover over the island when it's showing an active event (media, notifications, etc.) to make it transparent and click-through, letting you interact with windows underneath without dismissing the island.
 
 ---
 
 ## ⚙️ Usage & Settings
 
 - **Hover & Scroll:** Hover over the island to seamlessly expand it. Use your mouse scroll wheel to swipe between the Media, Calendar, and Weather tabs.
+- **Ctrl+Hover:** Hold `Ctrl` while hovering over an active island to make it see-through and click-through. Release `Ctrl` or move your mouse away to restore it.
 - **Right-Click Menu:** Right-click the island to access Theme presets, Transparency settings, and to pin the island open.
 - **Windhawk Settings:** Visit the Mod Settings tab to change the island's Position, Size Scale, Animation Speed, and toggle specific modules. You can also perfectly align the island using the new `Offset X` and `Offset Y` settings, and even select exactly which monitor the island should appear on (including a brand new "Follow Mouse" mode!).
 - **Notifications:** To use the notification module, you need to add `explorer.exe` to the process inclusion list in the Advanced tab of the mod settings and restart the mod.
@@ -505,6 +508,7 @@ std::atomic<int> g_idleTab = 0;
 std::atomic<bool> g_layoutDirty = true;
 std::atomic<bool> g_clickExpanded = false;
 std::atomic<int> g_pressedMediaButton = -1;
+
 FILETIME g_prevIdleTime = {};
 FILETIME g_prevKernelTime = {};
 FILETIME g_prevUserTime = {};
@@ -2975,6 +2979,26 @@ class Renderer {
                                          DWRITE_FONT_STYLE_NORMAL,
                                          DWRITE_FONT_STRETCH_NORMAL,
                                          18.0f, L"", &clockFormat_);
+        dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr,
+                                         DWRITE_FONT_WEIGHT_BOLD,
+                                         DWRITE_FONT_STYLE_NORMAL,
+                                         DWRITE_FONT_STRETCH_NORMAL,
+                                         12.0f, L"", &boldTextFormat_);
+        dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr,
+                                         DWRITE_FONT_WEIGHT_BOLD,
+                                         DWRITE_FONT_STYLE_NORMAL,
+                                         DWRITE_FONT_STRETCH_NORMAL,
+                                         42.0f, L"", &hugeTextFormat_);
+        dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr,
+                                         DWRITE_FONT_WEIGHT_BOLD,
+                                         DWRITE_FONT_STYLE_NORMAL,
+                                         DWRITE_FONT_STRETCH_NORMAL,
+                                         15.5f, L"", &mediaTitleFormat_);
+        dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr,
+                                         DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                                         DWRITE_FONT_STYLE_NORMAL,
+                                         DWRITE_FONT_STRETCH_NORMAL,
+                                         13.0f, L"", &mediaArtistFormat_);
         dwriteFactory_->CreateTextFormat(L"Segoe Fluent Icons", nullptr,
                                          DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
                                          DWRITE_FONT_STRETCH_NORMAL,
@@ -2990,6 +3014,12 @@ class Renderer {
             clockFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
             clockFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
             clockFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        }
+        if (mediaTitleFormat_) {
+            mediaTitleFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        }
+        if (mediaArtistFormat_) {
+            mediaArtistFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
         }
         if (iconFormat_) {
             iconFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
@@ -3091,6 +3121,8 @@ class Renderer {
         smallTextFormat_.Reset();
         boldTextFormat_.Reset();
         hugeTextFormat_.Reset();
+        mediaTitleFormat_.Reset();
+        mediaArtistFormat_.Reset();
         clockFormat_.Reset();
         iconFormat_.Reset();
         dwriteFactory_.Reset();
@@ -3157,8 +3189,12 @@ class Renderer {
 
         textFormat_ = nullptr;
         smallTextFormat_ = nullptr;
+        boldTextFormat_ = nullptr;
+        hugeTextFormat_ = nullptr;
         clockFormat_ = nullptr;
         iconFormat_ = nullptr;
+        mediaTitleFormat_ = nullptr;
+        mediaArtistFormat_ = nullptr;
 
         dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr,
                                          DWRITE_FONT_WEIGHT_SEMI_BOLD,
@@ -3185,6 +3221,16 @@ class Renderer {
                                          DWRITE_FONT_STYLE_NORMAL,
                                          DWRITE_FONT_STRETCH_NORMAL,
                                          42.0f, L"", &hugeTextFormat_);
+        dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr,
+                                         DWRITE_FONT_WEIGHT_BOLD,
+                                         DWRITE_FONT_STYLE_NORMAL,
+                                         DWRITE_FONT_STRETCH_NORMAL,
+                                         16.0f, L"", &mediaTitleFormat_);
+        dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr,
+                                         DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                                         DWRITE_FONT_STYLE_NORMAL,
+                                         DWRITE_FONT_STRETCH_NORMAL,
+                                         13.5f, L"", &mediaArtistFormat_);
         dwriteFactory_->CreateTextFormat(L"Segoe Fluent Icons", nullptr,
                                          DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
                                          DWRITE_FONT_STRETCH_NORMAL,
@@ -3208,6 +3254,12 @@ class Renderer {
             clockFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
             clockFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
             clockFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        }
+        if (mediaTitleFormat_) {
+            mediaTitleFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        }
+        if (mediaArtistFormat_) {
+            mediaArtistFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
         }
         if (iconFormat_) {
             iconFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
@@ -4237,52 +4289,108 @@ class Renderer {
             if (tab < 0) tab += 3;
 
             if (tab == 0) {
-                // Expanded Apple DI media: large square art on left, text center.
-                const float artSize = 64.0f;
-                D2D1_RECT_F artRect = D2D1::RectF(rect.left + 24.0f, rect.top + 20.0f,
-                                                  rect.left + 24.0f + artSize, rect.top + 20.0f + artSize);
-                DrawAlbumArt(state.media, artRect, now, 16.0f, true);
+                // ── Background album art (covers the entire pill, fades to dark on left) ──
+                if (!state.media.art.bgra.empty()) {
+                    // Create/update art bitmap
+                    if (artGeneration_ != state.media.art.generation || !artBitmap_) {
+                        D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(
+                            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+                        target_->CreateBitmap(D2D1::SizeU(state.media.art.width, state.media.art.height),
+                                              state.media.art.bgra.data(), state.media.art.width * 4,
+                                              &props, &artBitmap_);
+                        artGeneration_ = state.media.art.generation;
+                    }
+                    if (artBitmap_) {
+                        // Draw art covering the entire pill with aspect-fill
+                        D2D1_RECT_F artDst = rect;
 
-                float shiftX = 0.0f;
-                if (state.system.micActive && state.system.cameraActive) {
-                    shiftX = 30.0f;
-                } else if (state.system.micActive || state.system.cameraActive) {
-                    shiftX = 16.0f;
-                }
+                        // Calculate aspect-fill source rectangle
+                        float bmpW = static_cast<float>(state.media.art.width);
+                        float bmpH = static_cast<float>(state.media.art.height);
+                        float dstW = artDst.right - artDst.left;
+                        float dstH = artDst.bottom - artDst.top;
+                        D2D1_RECT_F srcRect = D2D1::RectF(0.0f, 0.0f, bmpW, bmpH);
 
-                const float waveW = 32.0f;
-                const float waveH = 20.0f;
-                D2D1_RECT_F waveRect = D2D1::RectF(rect.right - 24.0f - shiftX - waveW,
-                                                   rect.top + 20.0f + (artSize - waveH) * 0.5f,
-                                                   rect.right - 24.0f - shiftX,
-                                                   rect.top + 20.0f + (artSize + waveH) * 0.5f);
+                        if (bmpW > 0.0f && bmpH > 0.0f && dstW > 0.0f && dstH > 0.0f) {
+                            if (bmpW / bmpH > dstW / dstH) {
+                                float cropW = bmpH * (dstW / dstH);
+                                float left = (bmpW - cropW) * 0.5f;
+                                srcRect = D2D1::RectF(left, 0.0f, left + cropW, bmpH);
+                            } else {
+                                float cropH = bmpW * (dstH / dstW);
+                                float top = (bmpH - cropH) * 0.5f;
+                                srcRect = D2D1::RectF(0.0f, top, bmpW, top + cropH);
+                            }
+                        }
 
-                const float textLeft = artRect.right + 18.0f;
-                const float textRight = waveRect.left - 16.0f;
-                
-                // Title — bold, prominent.
-                D2D1_RECT_F titleRect = D2D1::RectF(textLeft, rect.top + 34.0f, textRight, rect.top + 54.0f);
-                DrawMarqueeText(state.media.title.empty() ? L"Unknown" : state.media.title,
-                                titleRect, textFormat_.Get(), textBrush_.Get(), now, 42.0f);
+                        // Draw with full opacity (1.0f) so the album art is clearly visible
+                        target_->DrawBitmap(artBitmap_.Get(), artDst, 1.0f,
+                                            D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &srcRect);
 
-                // Artist — muted below title.
-                D2D1_RECT_F artistRect = D2D1::RectF(textLeft, rect.top + 54.0f, textRight, rect.top + 74.0f);
-                mutedBrush_->SetOpacity(0.55f);
-                DrawMarqueeText(state.media.artist.empty() ? L"" : state.media.artist,
-                                artistRect, smallTextFormat_.Get(), mutedBrush_.Get(), now, 30.0f);
-                mutedBrush_->SetOpacity(0.50f);
-
-                if (state.media.playing) {
-                    DrawWaveform(state, waveRect);
-                } else {
-                    mutedBrush_->SetOpacity(0.5f);
-                    for (int i = 0; i < 4; ++i) {
-                        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(waveRect.left + i * 4.0f + 2.0f, (waveRect.top + waveRect.bottom) * 0.5f), 1.2f, 1.2f), mutedBrush_.Get());
+                        // Gradient fade from dark (left edge of the pill) to transparent (right)
+                        // It starts solid black on the left to keep text readable, and fades out by 72% width
+                        ComPtr<ID2D1GradientStopCollection> gradStops;
+                        D2D1_GRADIENT_STOP stops[3];
+                        const D2D1_COLOR_F darkBg = D2D1::ColorF(0.0f, 0.0f, 0.0f, 1.0f);
+                        stops[0].color = darkBg;
+                        stops[0].position = 0.0f;
+                        stops[1].color = D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.65f);
+                        stops[1].position = 0.5f;
+                        stops[2].color = D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f);
+                        stops[2].position = 1.0f;
+                        target_->CreateGradientStopCollection(stops, 3, &gradStops);
+                        if (gradStops) {
+                            ComPtr<ID2D1LinearGradientBrush> fadeBrush;
+                            const float fadeLeft = rect.left;
+                            const float fadeRight = rect.left + (rect.right - rect.left) * 0.72f;
+                            target_->CreateLinearGradientBrush(
+                                D2D1::LinearGradientBrushProperties(
+                                    D2D1::Point2F(fadeLeft, rect.top),
+                                    D2D1::Point2F(fadeRight, rect.top)),
+                                gradStops.Get(), &fadeBrush);
+                            if (fadeBrush) {
+                                target_->FillRectangle(artDst, fadeBrush.Get());
+                            }
+                        }
                     }
                 }
 
-                // Timeline (Scrubber)
-                const float scrubberY = rect.top + 114.0f;
+                // Create a local white brush for high contrast text rendering
+                ComPtr<ID2D1SolidColorBrush> whiteTextBrush;
+                target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f), &whiteTextBrush);
+
+                // ── Source app badge (top-left, small icon + name) ──
+                if (!state.media.sourceIcon.bgra.empty()) {
+                    D2D1_RECT_F srcRect = D2D1::RectF(rect.left + 20.0f, rect.top + 14.0f,
+                                                       rect.left + 36.0f, rect.top + 30.0f);
+                    DrawBitmapPixels(state.media.sourceIcon, srcRect,
+                                     mediaSourceIconBitmap_, mediaSourceIconGeneration_, 0.8f);
+                }
+                if (!state.media.sourceName.empty()) {
+                    whiteTextBrush->SetOpacity(0.55f);
+                    D2D1_RECT_F srcNameRect = D2D1::RectF(rect.left + 40.0f, rect.top + 14.0f,
+                                                           rect.left + 180.0f, rect.top + 30.0f);
+                    target_->DrawTextW(state.media.sourceName.c_str(),
+                                       static_cast<UINT32>(state.media.sourceName.size()),
+                                       mediaArtistFormat_.Get(), srcNameRect, whiteTextBrush.Get());
+                }
+
+                // ── Title & Artist (left side, below source badge) ──
+                const float textLeft = rect.left + 20.0f;
+                const float textRight = rect.left + (rect.right - rect.left) * 0.65f;
+
+                D2D1_RECT_F titleRect = D2D1::RectF(textLeft, rect.top + 40.0f, textRight, rect.top + 62.0f);
+                whiteTextBrush->SetOpacity(0.96f);
+                DrawMarqueeText(state.media.title.empty() ? L"Unknown" : state.media.title,
+                                titleRect, mediaTitleFormat_.Get(), whiteTextBrush.Get(), now, 50.0f);
+
+                whiteTextBrush->SetOpacity(0.60f);
+                D2D1_RECT_F artistRect = D2D1::RectF(textLeft, rect.top + 62.0f, textRight, rect.top + 80.0f);
+                DrawMarqueeText(state.media.artist.empty() ? L"" : state.media.artist,
+                                artistRect, mediaArtistFormat_.Get(), whiteTextBrush.Get(), now, 36.0f);
+
+                // ── Waveform visualizer scrubber ──
+                const float scrubberY = rect.top + 104.0f;
                 double currentPosition = state.media.positionTicks / 10000000.0;
                 double duration = state.media.endTicks / 10000000.0;
                 if (state.media.playing && state.media.lastUpdatedTicks > 0) {
@@ -4299,36 +4407,139 @@ class Renderer {
                     return buf;
                 };
 
-                std::wstring elapsedStr = FormatTime(currentPosition);
-                std::wstring remainStr = L"-" + FormatTime(duration - currentPosition);
-
-                const float scrubLeft = rect.left + 24.0f;
-                const float scrubRight = rect.right - 24.0f;
-                
-                mutedBrush_->SetOpacity(0.8f);
-                D2D1_RECT_F elRect = D2D1::RectF(scrubLeft, scrubberY - 8.0f, scrubLeft + 40.0f, scrubberY + 8.0f);
-                target_->DrawTextW(elapsedStr.c_str(), static_cast<UINT32>(elapsedStr.size()), smallTextFormat_.Get(), elRect, mutedBrush_.Get());
-                
-                D2D1_RECT_F remRect = D2D1::RectF(scrubRight - 36.0f, scrubberY - 8.0f, scrubRight, scrubberY + 8.0f);
-                target_->DrawTextW(remainStr.c_str(), static_cast<UINT32>(remainStr.size()), smallTextFormat_.Get(), remRect, mutedBrush_.Get());
-
-                const float barLeft = scrubLeft + 36.0f;
-                const float barRight = scrubRight - 38.0f;
+                const float scrubLeft = rect.left + 20.0f;
+                const float scrubRight = rect.right - 20.0f;
+                const float barLeft = scrubLeft;
+                const float barRight = scrubRight;
                 const float progress = duration > 0.0 ? static_cast<float>(currentPosition / duration) : 0.0f;
 
-                ComPtr<ID2D1SolidColorBrush> scrubBg;
-                target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.15f), &scrubBg);
-                target_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(barLeft, scrubberY - 2.5f, barRight, scrubberY + 2.5f), 2.5f, 2.5f), scrubBg.Get());
+                // Smooth continuous waveform blob
+                {
+                    const float barW = barRight - barLeft;
+                    const float progressX = Clamp(barLeft + barW * progress, barLeft, barRight);
+                    const size_t wfSize = state.waveform.size();
 
-                ComPtr<ID2D1SolidColorBrush> scrubFg;
-                target_->CreateSolidColorBrush(state.media.art.bgra.empty() ? D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.9f) : state.media.art.sampledAccent, &scrubFg);
-                const float scrubW = (barRight - barLeft) * progress;
-                target_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(barLeft, scrubberY - 2.5f, barLeft + scrubW, scrubberY + 2.5f), 2.5f, 2.5f), scrubFg.Get());
+                    // Brushes
+                    ComPtr<ID2D1SolidColorBrush> playedBrush, unplayedBrush, knobBrush;
+                    D2D1_COLOR_F accentCol = state.media.art.bgra.empty()
+                        ? D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.9f)
+                        : state.media.art.sampledAccent;
+                    accentCol.a = 0.85f; // Nice semi-opaque accent
+                    target_->CreateSolidColorBrush(accentCol, &playedBrush);
+                    target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.14f), &unplayedBrush);
+                    target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.95f), &knobBrush);
 
-                // Controls
-                const float cy = rect.top + 148.0f;
+                    // 1. Draw unplayed portion (clean flat track on the right)
+                    if (progressX < barRight) {
+                        D2D1_RECT_F unplayedRect = D2D1::RectF(progressX, scrubberY - 2.0f, barRight, scrubberY + 2.0f);
+                        target_->FillRoundedRectangle(D2D1::RoundedRect(unplayedRect, 2.0f, 2.0f), unplayedBrush.Get());
+                    }
+
+                    // 2. Draw played portion with the wave rising only from the top
+                    if (progressX > barLeft) {
+                        ComPtr<ID2D1PathGeometry> waveGeometry;
+                        d2dFactory_->CreatePathGeometry(&waveGeometry);
+                        if (waveGeometry) {
+                            ComPtr<ID2D1GeometrySink> sink;
+                            waveGeometry->Open(&sink);
+                            if (sink) {
+                                // Start at bottom-left corner of the played bar
+                                sink->BeginFigure(D2D1::Point2F(barLeft, scrubberY + 2.0f), D2D1_FIGURE_BEGIN_FILLED);
+                                
+                                // Line to bottom-right corner of the played bar (at progressX)
+                                sink->AddLine(D2D1::Point2F(progressX, scrubberY + 2.0f));
+                                
+                                // Line up to top-right corner of the flat bar at progressX
+                                sink->AddLine(D2D1::Point2F(progressX, scrubberY - 2.0f));
+
+                                // Build the smooth top waving boundary going backward (from progressX to barLeft)
+                                const int numPoints = 32;
+                                for (int i = numPoints - 1; i >= 0; --i) {
+                                    float t = static_cast<float>(i) / (numPoints - 1);
+                                    float x = barLeft + t * (progressX - barLeft);
+                                    
+                                    // Window function makes the wave taper to flat track height at both ends
+                                    float window = std::sin(t * 3.14159265f);
+
+                                    float amp = 0.0f;
+                                    if (state.media.playing && wfSize > 0) {
+                                        // Map point to the waveform ring buffer
+                                        size_t sampleOffset = numPoints - i;
+                                        size_t wfIdx = (state.waveformWrite + wfSize - sampleOffset * 2) % wfSize;
+                                        amp = Clamp(state.waveform[wfIdx], 0.0f, 1.0f);
+                                        // Soft fluid ripple animation overlay
+                                        float wave = 0.14f * std::sin(t * 7.5f - static_cast<float>(now) * 4.2f);
+                                        amp = Clamp(amp + wave, 0.0f, 1.0f);
+                                    } else {
+                                        // Gentle idle wave when paused
+                                        amp = 0.08f + 0.06f * std::sin(t * 4.5f + static_cast<float>(now) * 1.4f);
+                                    }
+
+                                    // Flat half-height is 2px. Max wave height is 2px + 10px = 12px
+                                    float h = 2.0f + window * amp * 10.0f;
+                                    float y = scrubberY - h;
+
+                                    if (i == numPoints - 1) {
+                                        sink->AddLine(D2D1::Point2F(x, y));
+                                    } else {
+                                        float nextT = static_cast<float>(i + 1) / (numPoints - 1);
+                                        float nextX = barLeft + nextT * (progressX - barLeft);
+                                        float nextWindow = std::sin(nextT * 3.14159265f);
+                                        
+                                        float nextAmp = 0.0f;
+                                        if (state.media.playing && wfSize > 0) {
+                                            size_t nextSampleOffset = numPoints - (i + 1);
+                                            size_t nextWfIdx = (state.waveformWrite + wfSize - nextSampleOffset * 2) % wfSize;
+                                            nextAmp = Clamp(state.waveform[nextWfIdx], 0.0f, 1.0f);
+                                            float nextWave = 0.14f * std::sin(nextT * 7.5f - static_cast<float>(now) * 4.2f);
+                                            nextAmp = Clamp(nextAmp + nextWave, 0.0f, 1.0f);
+                                        } else {
+                                            nextAmp = 0.08f + 0.06f * std::sin(nextT * 4.5f + static_cast<float>(now) * 1.4f);
+                                        }
+                                        
+                                        float nextH = 2.0f + nextWindow * nextAmp * 10.0f;
+                                        float nextY = scrubberY - nextH;
+
+                                        float midX = (nextX + x) * 0.5f;
+                                        sink->AddBezier(D2D1::BezierSegment(
+                                            D2D1::Point2F(midX, nextY),
+                                            D2D1::Point2F(midX, y),
+                                            D2D1::Point2F(x, y)));
+                                    }
+                                }
+
+                                // Line down to close the figure back at the bottom-left corner
+                                sink->AddLine(D2D1::Point2F(barLeft, scrubberY + 2.0f));
+                                sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                                sink->Close();
+                            }
+                        }
+                        
+                        if (waveGeometry && playedBrush) {
+                            target_->FillGeometry(waveGeometry.Get(), playedBrush.Get());
+                        }
+                    }
+
+                    // 3. Draw progress knob
+                    if (knobBrush) {
+                        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(progressX, scrubberY), 5.5f, 5.5f), knobBrush.Get());
+                    }
+                }
+
+                // Timestamps below waveform
+                std::wstring elapsedStr = FormatTime(currentPosition);
+                std::wstring remainStr = FormatTime(duration);
+                whiteTextBrush->SetOpacity(0.60f);
+                D2D1_RECT_F elRect = D2D1::RectF(scrubLeft, scrubberY + 13.0f, scrubLeft + 54.0f, scrubberY + 30.0f);
+                target_->DrawTextW(elapsedStr.c_str(), static_cast<UINT32>(elapsedStr.size()), mediaArtistFormat_.Get(), elRect, whiteTextBrush.Get());
+
+                D2D1_RECT_F remRect = D2D1::RectF(scrubRight - 46.0f, scrubberY + 13.0f, scrubRight, scrubberY + 30.0f);
+                target_->DrawTextW(remainStr.c_str(), static_cast<UINT32>(remainStr.size()), mediaArtistFormat_.Get(), remRect, whiteTextBrush.Get());
+
+                // ── Media Controls ──
+                const float cy = rect.top + 154.0f;
                 const float cx = (rect.left + rect.right) * 0.5f;
-                DrawMediaControls(state.media.playing, 
+                DrawMediaControls(state.media.playing,
                                   D2D1::Point2F(cx - 64.0f, cy),
                                   D2D1::Point2F(cx, cy),
                                   D2D1::Point2F(cx + 64.0f, cy));
@@ -4417,23 +4628,50 @@ class Renderer {
             radius *= 0.88f; // Shrink by 12% on click
         }
 
+        // Draw drop shadow for the button circle itself
+        ComPtr<ID2D1SolidColorBrush> shadowBrush;
+        target_->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.32f), &shadowBrush);
+        if (shadowBrush) {
+            target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(center.x + 1.0f, center.y + 1.5f), radius, radius), shadowBrush.Get());
+        }
+
         ComPtr<ID2D1SolidColorBrush> bg;
         target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, primary ? (isPressed ? 0.16f : 0.080f) : (isPressed ? 0.10f : 0.040f)), &bg);
         target_->FillEllipse(D2D1::Ellipse(center, radius, radius), bg.Get());
-        accentBrush_->SetOpacity(primary ? (isPressed ? 1.0f : 0.88f) : (isPressed ? 0.80f : 0.62f));
+
+        ComPtr<ID2D1SolidColorBrush> whiteBrush;
+        target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 1), &whiteBrush);
+        whiteBrush->SetOpacity(primary ? (isPressed ? 1.0f : 0.88f) : (isPressed ? 0.80f : 0.62f));
 
         if (kind == 1) {  // pause
             const float h = radius * 0.72f;
+
+            // Draw shadow for pause lines
+            if (shadowBrush) {
+                shadowBrush->SetOpacity(primary ? (isPressed ? 0.8f : 0.7f) : (isPressed ? 0.6f : 0.5f));
+                target_->FillRoundedRectangle(D2D1::RoundedRect(
+                                                 D2D1::RectF(center.x - 3.0f, center.y - h * 0.5f + 1.2f,
+                                                             center.x - 0.5f, center.y + h * 0.5f + 1.2f),
+                                                 1.0f, 1.0f),
+                                             shadowBrush.Get());
+                target_->FillRoundedRectangle(D2D1::RoundedRect(
+                                                 D2D1::RectF(center.x + 2.5f, center.y - h * 0.5f + 1.2f,
+                                                             center.x + 5.0f, center.y + h * 0.5f + 1.2f),
+                                                 1.0f, 1.0f),
+                                             shadowBrush.Get());
+            }
+
+            // Draw white pause lines
             target_->FillRoundedRectangle(D2D1::RoundedRect(
                                              D2D1::RectF(center.x - 4.0f, center.y - h * 0.5f,
                                                          center.x - 1.5f, center.y + h * 0.5f),
                                              1.0f, 1.0f),
-                                         accentBrush_.Get());
+                                         whiteBrush.Get());
             target_->FillRoundedRectangle(D2D1::RoundedRect(
                                              D2D1::RectF(center.x + 1.5f, center.y - h * 0.5f,
                                                          center.x + 4.0f, center.y + h * 0.5f),
                                              1.0f, 1.0f),
-                                         accentBrush_.Get());
+                                         whiteBrush.Get());
         } else {
             const float dir = kind == 0 ? -1.0f : 1.0f;
             const float tri = radius * (primary ? 0.70f : 0.62f);
@@ -4445,6 +4683,36 @@ class Renderer {
             D2D1_POINT_2F p1 = D2D1::Point2F(cx - dir * tri * 0.35f, center.y - tri * 0.58f);
             D2D1_POINT_2F p2 = D2D1::Point2F(cx - dir * tri * 0.35f, center.y + tri * 0.58f);
             D2D1_POINT_2F p3 = D2D1::Point2F(cx + dir * tri * 0.55f, center.y);
+
+            // Draw shadow for geometry
+            if (shadowBrush) {
+                shadowBrush->SetOpacity(primary ? (isPressed ? 0.8f : 0.7f) : (isPressed ? 0.6f : 0.5f));
+                
+                D2D1_POINT_2F sp1 = D2D1::Point2F(p1.x + 1.0f, p1.y + 1.2f);
+                D2D1_POINT_2F sp2 = D2D1::Point2F(p2.x + 1.0f, p2.y + 1.2f);
+                D2D1_POINT_2F sp3 = D2D1::Point2F(p3.x + 1.0f, p3.y + 1.2f);
+
+                ComPtr<ID2D1PathGeometry> sgeom;
+                d2dFactory_->CreatePathGeometry(&sgeom);
+                ComPtr<ID2D1GeometrySink> ssink;
+                if (sgeom && SUCCEEDED(sgeom->Open(&ssink))) {
+                    ssink->BeginFigure(sp1, D2D1_FIGURE_BEGIN_FILLED);
+                    ssink->AddLine(sp2);
+                    ssink->AddLine(sp3);
+                    ssink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                    ssink->Close();
+                    target_->FillGeometry(sgeom.Get(), shadowBrush.Get());
+                }
+
+                if (kind == 0 || kind == 3) {
+                    const float sx = cx + dir * radius * 0.55f + 1.0f;
+                    target_->DrawLine(D2D1::Point2F(sx, center.y - radius * 0.45f + 1.2f),
+                                      D2D1::Point2F(sx, center.y + radius * 0.45f + 1.2f),
+                                      shadowBrush.Get(), 1.5f);
+                }
+            }
+
+            // Draw white geometry
             ComPtr<ID2D1PathGeometry> geom;
             d2dFactory_->CreatePathGeometry(&geom);
             ComPtr<ID2D1GeometrySink> sink;
@@ -4454,17 +4722,15 @@ class Renderer {
             sink->AddLine(p3);
             sink->EndFigure(D2D1_FIGURE_END_CLOSED);
             sink->Close();
-            target_->FillGeometry(geom.Get(), accentBrush_.Get());
+            target_->FillGeometry(geom.Get(), whiteBrush.Get());
 
             if (kind == 0 || kind == 3) {
                 const float x = cx + dir * radius * 0.55f;
                 target_->DrawLine(D2D1::Point2F(x, center.y - radius * 0.45f),
                                   D2D1::Point2F(x, center.y + radius * 0.45f),
-                                  accentBrush_.Get(), 1.5f);
+                                  whiteBrush.Get(), 1.5f);
             }
         }
-
-        accentBrush_->SetOpacity(1.0f);
     }
 
     void DrawAlbumArt(const MediaSnapshot& media, D2D1_RECT_F rect, double now, float radius = 9.0f, bool drawBadge = true) {
@@ -5190,6 +5456,8 @@ class Renderer {
     ComPtr<IDWriteTextFormat> hugeTextFormat_;
     ComPtr<IDWriteTextFormat> clockFormat_;
     ComPtr<IDWriteTextFormat> iconFormat_;
+    ComPtr<IDWriteTextFormat> mediaTitleFormat_;
+    ComPtr<IDWriteTextFormat> mediaArtistFormat_;
     ComPtr<ID2D1SolidColorBrush> accentBrush_;
     ComPtr<ID2D1SolidColorBrush> redBrush_;
     ComPtr<ID2D1SolidColorBrush> textBrush_;
@@ -5406,7 +5674,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             {
                 int xPos = GET_X_LPARAM(lParam);
                 int yPos = GET_Y_LPARAM(lParam);
-                
+
                 bool mediaActive = false;
                 {
                     std::lock_guard lock(g_stateMutex);
@@ -5453,7 +5721,8 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
                 int xPos = GET_X_LPARAM(lParam);
                 int yPos = GET_Y_LPARAM(lParam);
-                
+
+
                 bool expanded = Wh_GetIntValue(L"PinnedExpanded", 0) != 0 || g_clickExpanded.load();
                 if (!g_settings.expandOnHover && !expanded) {
                     g_clickExpanded = true;
@@ -5840,7 +6109,12 @@ DWORD WINAPI RenderThreadProc(void*) {
             g_state.system.renderFps = ClampInt(static_cast<int>(1.0f / std::max(dt, 0.001f) + 0.5f), 0, 240);
         }
 
-        SetClickThrough(hwnd, primary.kind == IslandKind::Idle && !hover && !pinned);
+        // Ctrl+hover see-through: holding Ctrl while hovering makes the island
+        // transparent and click-through so clicks pass to windows underneath.
+        // Releasing Ctrl or moving the mouse away restores normal behavior.
+        const bool ctrlHeld = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        const bool ctrlHoverCT = hover && ctrlHeld && primary.kind != IslandKind::Idle;
+        SetClickThrough(hwnd, (primary.kind == IslandKind::Idle && !hover && !pinned) || ctrlHoverCT);
 
         // Check if animating structurally
         if (std::abs(widthSpring.velocity) > 0.01f || std::abs(widthSpring.target - widthSpring.value) > 0.01f ||
@@ -5941,8 +6215,21 @@ DWORD WINAPI RenderThreadProc(void*) {
             prevProg = snapshot.progress.percent;
         }
 
+        // Track whether Ctrl+hover click-through state changed so we re-render
+        static bool prevCtrlHoverCT = false;
+        if (ctrlHoverCT != prevCtrlHoverCT) {
+            needsRender = true;
+            prevCtrlHoverCT = ctrlHoverCT;
+        }
+
         if (needsRender) {
-            renderer.Render(snapshot, g_settings, primary, secondary,
+            // When Ctrl+hover click-through is active, reduce pill opacity so the
+            // island becomes visually see-through to match the pass-through behavior.
+            Settings renderSettings = g_settings;
+            if (ctrlHoverCT) {
+                renderSettings.pillOpacity = Clamp(g_settings.pillOpacity * 0.35f, 0.15f, 0.45f);
+            }
+            renderer.Render(snapshot, renderSettings, primary, secondary,
                             widthSpring.value, heightSpring.value, nudgeSpring.value,
                             hover, pinned, now);
         }
