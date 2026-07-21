@@ -12,9 +12,9 @@ A smooth, interactive overlay for your desktop, inspired by Apple's Dynamic Isla
 
 ### Dashboards
 
-| Media Player | Calendar | Weather | Notification Center | Game Overlay | Idle View |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/media.png" width="160" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/calender.png" width="160" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/weather.png" width="160" /> | <img src="https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/notification-center.png" width="160" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/gamebar.png" width="160" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/idle.png" width="160" /> |
+| Flip Clock | Media Player | Calendar | Weather | Notification Center | Quick Timer | Game Overlay | Idle View |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/idle.png" width="160" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/media.png" width="160" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/calender.png" width="160" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/weather.png" width="160" /> | <img src="https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/notification-center.png" width="160" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/idle.png" width="160" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/gamebar.png" width="160" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/idle.png" width="160" /> |
 
 ### Privacy Indicators
 
@@ -28,7 +28,9 @@ A smooth, interactive overlay for your desktop, inspired by Apple's Dynamic Isla
 
 - 🟢 **Privacy Dots:** See an orange dot when your mic is on and a green dot for your camera.
 - 🎵 **Media Player:** Full-pill centered background album art with a smooth readability gradient, an elegant audio-reactive waving scrubber waveform (flat-bottomed waving track tapering cleanly to the knob), larger high-contrast white text, and playback controls with soft drop shadows.
-- 📅 **Dashboards:** Swipe or scroll to switch between Media, Calendar, live Weather, and the live Notification Center.
+- 🕰️ **Mechanical Flip Clock:** Retro iOS-style mechanical flip clock display featuring side-by-side split flip cards for hours and minutes with crisp white top flaps, 3D shaded bottom flaps, dark frame bezels, metallic hinge pins, vibrant retro iOS blue digits (`#007AFF`), blinking colon indicators, and a clean date/AM-PM subtitle badge. Placed right before the Calendar dashboard.
+- ⏱️ **Live Countdown Timer:** iOS-inspired Dynamic Island timer widget featuring a high-contrast counter-clockwise perimeter progress border, large bold timer display, target completion end-time header (`🔔 14:44`), and vector Pause/Play and Cancel control buttons. Includes preset quick timers (`15m`, `30m`, `60m`, `100m`), a custom minute picker, right-click tray context menu timer creation, and sound/toast alerts upon expiration.
+- 📅 **Dashboards:** Swipe or scroll to switch between Flip Clock, Media, Calendar, live Weather, Quick Timer, and the live Notification Center.
 - 🔔 **Notification Center:** View active Windows notifications live. Click a message (like WhatsApp or Telegram) to focus/bring that app to the foreground so you can reply, or click the X button to dismiss it from Windows.
 - 📞 **WhatsApp Call Banner:** See incoming WhatsApp calls instantly on the island, featuring the contact name, call type, and circular Accept (Receive) and Decline (Reject) buttons.
 - 🔒 **Key Alerts:** Get quick visual popups when you hit Caps Lock or Num Lock.

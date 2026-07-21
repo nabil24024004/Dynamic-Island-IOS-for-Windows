@@ -290,6 +290,7 @@ enum class IslandKind {
     Device,
     Split,
     Call,
+    Timer,
 };
 
 enum class Position {
@@ -470,6 +471,16 @@ struct WeatherSnapshot {
     double lastUpdated = 0.0;
 };
 
+struct TimerSnapshot {
+    bool active = false;
+    bool paused = false;
+    double duration = 0.0;
+    double targetTime = 0.0;
+    double remaining = 0.0;
+    int customMinutes = 5;
+    SYSTEMTIME endTime = {};
+};
+
 struct SharedState {
     MediaSnapshot media;
     ClipboardSnapshot clipboard;
@@ -483,6 +494,7 @@ struct SharedState {
     ProgressSnapshot progress;
     SystemSnapshot system;
     WeatherSnapshot weather;
+    TimerSnapshot timer;
     std::array<float, 48> waveform{};
     size_t waveformWrite = 0;
     bool muted = false;
@@ -583,6 +595,24 @@ double NowSeconds() {
     using clock = std::chrono::steady_clock;
     static const auto start = clock::now();
     return std::chrono::duration<double>(clock::now() - start).count();
+}
+
+void StartTimer(double seconds) {
+    std::lock_guard lock(g_stateMutex);
+    g_state.timer.active = true;
+    g_state.timer.paused = false;
+    g_state.timer.duration = seconds;
+    g_state.timer.remaining = seconds;
+    g_state.timer.targetTime = NowSeconds() + seconds;
+
+    SYSTEMTIME local = {};
+    GetLocalTime(&local);
+    uint64_t targetSecs = static_cast<uint64_t>(local.wHour) * 3600 + static_cast<uint64_t>(local.wMinute) * 60 + local.wSecond + static_cast<uint64_t>(seconds);
+    g_state.timer.endTime = local;
+    g_state.timer.endTime.wHour = static_cast<WORD>((targetSecs / 3600) % 24);
+    g_state.timer.endTime.wMinute = static_cast<WORD>((targetSecs / 60) % 60);
+    g_state.timer.endTime.wSecond = static_cast<WORD>(targetSecs % 60);
+    g_layoutDirty = true;
 }
 
 void AddFallbackNotification(const NotificationSnapshot& item) {
@@ -3379,6 +3409,17 @@ void ShowContextMenu(HWND hwnd, POINT screenPoint) {
     AppendMenuW(menu, MF_STRING, 23, L"Theme: Deep Purple");
     AppendMenuW(menu, MF_STRING, 24, L"Theme: Fluent Design");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+
+    HMENU timerSubMenu = CreatePopupMenu();
+    AppendMenuW(timerSubMenu, MF_STRING, 30, L"15 Min");
+    AppendMenuW(timerSubMenu, MF_STRING, 31, L"30 Min");
+    AppendMenuW(timerSubMenu, MF_STRING, 32, L"60 Min (1 Hr)");
+    AppendMenuW(timerSubMenu, MF_STRING, 33, L"100 Min");
+    AppendMenuW(timerSubMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(timerSubMenu, MF_STRING, 36, L"Stop / Reset Timer");
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(timerSubMenu), L"⏱️ Quick Timer");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+
     AppendMenuW(menu, MF_STRING, 9, L"Open Windhawk settings");
 
     SetForegroundWindow(hwnd);
@@ -3387,6 +3428,16 @@ void ShowContextMenu(HWND hwnd, POINT screenPoint) {
     DestroyMenu(menu);
 
     switch (cmd) {
+        case 30: StartTimer(900); break;
+        case 31: StartTimer(1800); break;
+        case 32: StartTimer(3600); break;
+        case 33: StartTimer(6000); break;
+        case 36: {
+            std::lock_guard lock(g_stateMutex);
+            g_state.timer.active = false;
+            g_layoutDirty = true;
+            break;
+        }
         case 1:
             DismissTransientState();
             break;
@@ -3536,7 +3587,7 @@ class Renderer {
                                          DWRITE_FONT_STYLE_NORMAL,
                                          DWRITE_FONT_STRETCH_NORMAL,
                                          13.0f, L"", &mediaArtistFormat_);
-        dwriteFactory_->CreateTextFormat(L"Segoe Fluent Icons", nullptr,
+        dwriteFactory_->CreateTextFormat(L"Segoe MDL2 Assets", nullptr,
                                          DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
                                          DWRITE_FONT_STRETCH_NORMAL,
                                          16.0f, L"", &iconFormat_);
@@ -3660,6 +3711,7 @@ class Renderer {
         smallTextFormat_.Reset();
         boldTextFormat_.Reset();
         hugeTextFormat_.Reset();
+        flipClockFormat_.Reset();
         mediaTitleFormat_.Reset();
         mediaArtistFormat_.Reset();
         clockFormat_.Reset();
@@ -3730,6 +3782,7 @@ class Renderer {
         smallTextFormat_ = nullptr;
         boldTextFormat_ = nullptr;
         hugeTextFormat_ = nullptr;
+        flipClockFormat_ = nullptr;
         clockFormat_ = nullptr;
         iconFormat_ = nullptr;
         mediaTitleFormat_ = nullptr;
@@ -3739,12 +3792,12 @@ class Renderer {
                                          DWRITE_FONT_WEIGHT_SEMI_BOLD,
                                          DWRITE_FONT_STYLE_NORMAL,
                                          DWRITE_FONT_STRETCH_NORMAL,
-                                         13.5f, L"", &textFormat_);
-        dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Small", nullptr,
-                                         DWRITE_FONT_WEIGHT_NORMAL,
+                                         14.0f, L"", &textFormat_);
+        dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr,
+                                         DWRITE_FONT_WEIGHT_SEMI_BOLD,
                                          DWRITE_FONT_STYLE_NORMAL,
                                          DWRITE_FONT_STRETCH_NORMAL,
-                                         11.0f, L"", &smallTextFormat_);
+                                         12.0f, L"", &smallTextFormat_);
         dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr,
                                          DWRITE_FONT_WEIGHT_BOLD,
                                          DWRITE_FONT_STYLE_NORMAL,
@@ -3764,13 +3817,18 @@ class Renderer {
                                          DWRITE_FONT_WEIGHT_BOLD,
                                          DWRITE_FONT_STYLE_NORMAL,
                                          DWRITE_FONT_STRETCH_NORMAL,
+                                         76.0f * scale, L"", &flipClockFormat_);
+        dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr,
+                                         DWRITE_FONT_WEIGHT_BOLD,
+                                         DWRITE_FONT_STYLE_NORMAL,
+                                         DWRITE_FONT_STRETCH_NORMAL,
                                          16.0f, L"", &mediaTitleFormat_);
         dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr,
                                          DWRITE_FONT_WEIGHT_SEMI_BOLD,
                                          DWRITE_FONT_STYLE_NORMAL,
                                          DWRITE_FONT_STRETCH_NORMAL,
                                          13.5f, L"", &mediaArtistFormat_);
-        dwriteFactory_->CreateTextFormat(L"Segoe Fluent Icons", nullptr,
+        dwriteFactory_->CreateTextFormat(L"Segoe MDL2 Assets", nullptr,
                                          DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
                                          DWRITE_FONT_STRETCH_NORMAL,
                                          16.0f, L"", &iconFormat_);
@@ -3788,6 +3846,11 @@ class Renderer {
         if (hugeTextFormat_) {
             hugeTextFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
             hugeTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        }
+        if (flipClockFormat_) {
+            flipClockFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+            flipClockFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            flipClockFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         }
         if (clockFormat_) {
             clockFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
@@ -3921,6 +3984,9 @@ class Renderer {
                 break;
             case IslandKind::Progress:
                 DrawProgress(state, unscaledRect);
+                break;
+            case IslandKind::Timer:
+                DrawTimer(state, unscaledRect, now);
                 break;
             case IslandKind::Idle:
             default:
@@ -4105,79 +4171,280 @@ class Renderer {
 
 
 
+    void DrawFlipCard(D2D1_RECT_F cardRect, const wchar_t* textVal, ID2D1Brush* digitBrush, float scale) {
+        const float cx = (cardRect.left + cardRect.right) * 0.5f;
+        const float cy = (cardRect.top + cardRect.bottom) * 0.5f;
+
+        // 1. Dark outer frame / border
+        ComPtr<ID2D1SolidColorBrush> frameBrush;
+        target_->CreateSolidColorBrush(D2D1::ColorF(0.11f, 0.11f, 0.12f, 0.95f * settingsOpacity_), &frameBrush);
+        target_->FillRoundedRectangle(D2D1::RoundedRect(cardRect, 16.0f * scale, 16.0f * scale), frameBrush.Get());
+
+        ComPtr<ID2D1SolidColorBrush> frameStroke;
+        target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.15f * settingsOpacity_), &frameStroke);
+        target_->DrawRoundedRectangle(D2D1::RoundedRect(cardRect, 16.0f * scale, 16.0f * scale), frameStroke.Get(), 1.5f * scale);
+
+        // 2. Inset inner flip flap container
+        const float inset = 6.0f * scale;
+        D2D1_RECT_F innerRect = D2D1::RectF(cardRect.left + inset, cardRect.top + inset, cardRect.right - inset, cardRect.bottom - inset);
+        const float innerCy = (innerRect.top + innerRect.bottom) * 0.5f;
+
+        // 3. Top Half Flap (Crisp Light White)
+        D2D1_RECT_F topFlap = D2D1::RectF(innerRect.left, innerRect.top, innerRect.right, innerCy - 0.75f * scale);
+        ComPtr<ID2D1SolidColorBrush> topBrush;
+        target_->CreateSolidColorBrush(D2D1::ColorF(0.98f, 0.98f, 1.0f, 0.96f), &topBrush);
+
+        ComPtr<ID2D1PathGeometry> topPath;
+        if (SUCCEEDED(d2dFactory_->CreatePathGeometry(&topPath))) {
+            ComPtr<ID2D1GeometrySink> sink;
+            if (SUCCEEDED(topPath->Open(&sink))) {
+                const float r = 10.0f * scale;
+                sink->BeginFigure(D2D1::Point2F(topFlap.left + r, topFlap.top), D2D1_FIGURE_BEGIN_FILLED);
+                sink->AddLine(D2D1::Point2F(topFlap.right - r, topFlap.top));
+                sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(topFlap.right, topFlap.top + r), D2D1::SizeF(r, r), 0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                sink->AddLine(D2D1::Point2F(topFlap.right, topFlap.bottom));
+                sink->AddLine(D2D1::Point2F(topFlap.left, topFlap.bottom));
+                sink->AddLine(D2D1::Point2F(topFlap.left, topFlap.top + r));
+                sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(topFlap.left + r, topFlap.top), D2D1::SizeF(r, r), 0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                sink->Close();
+                target_->FillGeometry(topPath.Get(), topBrush.Get());
+            }
+        }
+
+        // 4. Bottom Half Flap (Shaded Off-White 3D flap)
+        D2D1_RECT_F botFlap = D2D1::RectF(innerRect.left, innerCy + 0.75f * scale, innerRect.right, innerRect.bottom);
+        ComPtr<ID2D1SolidColorBrush> botBrush;
+        target_->CreateSolidColorBrush(D2D1::ColorF(0.90f, 0.90f, 0.92f, 0.96f), &botBrush);
+
+        ComPtr<ID2D1PathGeometry> botPath;
+        if (SUCCEEDED(d2dFactory_->CreatePathGeometry(&botPath))) {
+            ComPtr<ID2D1GeometrySink> sink;
+            if (SUCCEEDED(botPath->Open(&sink))) {
+                const float r = 10.0f * scale;
+                sink->BeginFigure(D2D1::Point2F(botFlap.left, botFlap.top), D2D1_FIGURE_BEGIN_FILLED);
+                sink->AddLine(D2D1::Point2F(botFlap.right, botFlap.top));
+                sink->AddLine(D2D1::Point2F(botFlap.right, botFlap.bottom - r));
+                sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(botFlap.right - r, botFlap.bottom), D2D1::SizeF(r, r), 0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                sink->AddLine(D2D1::Point2F(botFlap.left + r, botFlap.bottom));
+                sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(botFlap.left, botFlap.bottom - r), D2D1::SizeF(r, r), 0.0f, D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                sink->AddLine(D2D1::Point2F(botFlap.left, botFlap.top));
+                sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                sink->Close();
+                target_->FillGeometry(botPath.Get(), botBrush.Get());
+            }
+        }
+
+        // 5. Flip Digit Number Text (Retro iOS Blue #007AFF - 76pt Bold)
+        D2D1_RECT_F textRect = D2D1::RectF(innerRect.left, innerRect.top - 4.0f * scale, innerRect.right, innerRect.bottom + 4.0f * scale);
+        if (flipClockFormat_) {
+            target_->DrawTextW(textVal, static_cast<UINT32>(wcslen(textVal)), flipClockFormat_.Get(), textRect, digitBrush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+        } else if (hugeTextFormat_) {
+            hugeTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            hugeTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            target_->DrawTextW(textVal, static_cast<UINT32>(wcslen(textVal)), hugeTextFormat_.Get(), textRect, digitBrush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+            hugeTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            hugeTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+        }
+
+        // 6. Mechanical Center Hinge Line & Pin Latches
+        ComPtr<ID2D1SolidColorBrush> hingeBrush;
+        target_->CreateSolidColorBrush(D2D1::ColorF(0.08f, 0.08f, 0.10f, 0.95f), &hingeBrush);
+        D2D1_RECT_F hingeLine = D2D1::RectF(cardRect.left + 4.0f * scale, innerCy - 1.25f * scale, cardRect.right - 4.0f * scale, innerCy + 1.25f * scale);
+        target_->FillRectangle(hingeLine, hingeBrush.Get());
+
+        ComPtr<ID2D1SolidColorBrush> pinBrush;
+        target_->CreateSolidColorBrush(D2D1::ColorF(0.30f, 0.30f, 0.35f, 1.0f), &pinBrush);
+        D2D1_RECT_F leftPin = D2D1::RectF(cardRect.left + 2.0f * scale, innerCy - 5.0f * scale, cardRect.left + 8.0f * scale, innerCy + 5.0f * scale);
+        D2D1_RECT_F rightPin = D2D1::RectF(cardRect.right - 8.0f * scale, innerCy - 5.0f * scale, cardRect.right - 2.0f * scale, innerCy + 5.0f * scale);
+        target_->FillRoundedRectangle(D2D1::RoundedRect(leftPin, 1.5f * scale, 1.5f * scale), pinBrush.Get());
+        target_->FillRoundedRectangle(D2D1::RoundedRect(rightPin, 1.5f * scale, 1.5f * scale), pinBrush.Get());
+
+        // 7. Soft bottom 3D shadow flap line
+        ComPtr<ID2D1SolidColorBrush> shadowFlap;
+        target_->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.15f), &shadowFlap);
+        target_->FillRectangle(D2D1::RectF(innerRect.left, innerCy + 1.25f * scale, innerRect.right, innerCy + 6.0f * scale), shadowFlap.Get());
+    }
+
+    void DrawFlipClockDashboard(const SharedState& state, D2D1_RECT_F rect, const Settings& settings, double now, float scale, SYSTEMTIME& local) {
+        const float cx = (rect.left + rect.right) * 0.5f;
+        const float cy = (rect.top + rect.bottom) * 0.5f;
+
+        const float cardW = 142.0f * scale;
+        const float cardH = 126.0f * scale;
+        const float gap = 24.0f * scale;
+
+        D2D1_RECT_F leftCard = D2D1::RectF(cx - cardW - gap * 0.5f, cy - cardH * 0.5f - 8.0f * scale,
+                                            cx - gap * 0.5f, cy + cardH * 0.5f - 8.0f * scale);
+
+        D2D1_RECT_F rightCard = D2D1::RectF(cx + gap * 0.5f, cy - cardH * 0.5f - 8.0f * scale,
+                                             cx + cardW + gap * 0.5f, cy + cardH * 0.5f - 8.0f * scale);
+
+        // Digits: 12-hour format
+        int hour = local.wHour;
+        if (hour == 0) hour = 12;
+        else if (hour > 12) hour -= 12;
+
+        wchar_t hrStr[16] = {};
+        swprintf_s(hrStr, L"%02d", hour);
+
+        wchar_t minStr[16] = {};
+        swprintf_s(minStr, L"%02d", local.wMinute);
+
+        ComPtr<ID2D1SolidColorBrush> blueDigitBrush;
+        target_->CreateSolidColorBrush(D2D1::ColorF(0.0f, 0.478f, 1.0f, 1.0f), &blueDigitBrush); // Retro iOS Blue #007AFF
+
+        // Draw Left Flip Card (Hours)
+        DrawFlipCard(leftCard, hrStr, blueDigitBrush.Get(), scale);
+
+        // Draw Right Flip Card (Minutes)
+        DrawFlipCard(rightCard, minStr, blueDigitBrush.Get(), scale);
+
+        // Blinking Colon Dots (Center)
+        const bool colonVisible = (static_cast<int>(now * 2.0) % 2) == 0;
+        if (colonVisible) {
+            ComPtr<ID2D1SolidColorBrush> colonBrush;
+            target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 0.584f, 0.0f, 0.95f), &colonBrush); // iOS Orange #FF9500
+            const float dotY = (leftCard.top + leftCard.bottom) * 0.5f;
+            target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, dotY - 14.0f * scale), 4.0f * scale, 4.0f * scale), colonBrush.Get());
+            target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, dotY + 14.0f * scale), 4.0f * scale, 4.0f * scale), colonBrush.Get());
+        }
+
+        // Bottom Subtitle Badge (FLIP CLOCK • TUESDAY, JULY 21)
+        wchar_t dateBuf[64] = {};
+        wchar_t weekdayStr[32] = {};
+        GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, 0, &local, L"dddd", weekdayStr, ARRAYSIZE(weekdayStr), nullptr);
+        for (int i = 0; weekdayStr[i]; ++i) weekdayStr[i] = towupper(weekdayStr[i]);
+
+        wchar_t monthStr[32] = {};
+        GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, 0, &local, L"MMM d", monthStr, ARRAYSIZE(monthStr), nullptr);
+        for (int i = 0; monthStr[i]; ++i) monthStr[i] = towupper(monthStr[i]);
+
+        const wchar_t* amPm = (local.wHour >= 12) ? L"PM" : L"AM";
+        swprintf_s(dateBuf, L"FLIP CLOCK  •  %s, %s  •  %s", weekdayStr, monthStr, amPm);
+
+        D2D1_RECT_F subRect = D2D1::RectF(rect.left, rect.bottom - 22.0f * scale, rect.right, rect.bottom - 6.0f * scale);
+        mutedBrush_->SetOpacity(0.85f);
+        if (smallTextFormat_) {
+            smallTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            target_->DrawTextW(dateBuf, static_cast<UINT32>(wcslen(dateBuf)), smallTextFormat_.Get(), subRect, mutedBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+            smallTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        }
+    }
+
     void DrawCalendarDashboard(const SharedState& state, D2D1_RECT_F rect, const Settings& settings, double now, float scale, SYSTEMTIME& local) {
         ComPtr<ID2D1SolidColorBrush> calBg;
-        target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.04f * settingsOpacity_), &calBg);
-        D2D1_RECT_F leftBlock = D2D1::RectF(rect.left + 22.0f * scale, rect.top + 16.0f * scale,
-                                            rect.left + 115.0f * scale, rect.bottom - 22.0f * scale);
-        target_->FillRoundedRectangle(D2D1::RoundedRect(leftBlock, 12.0f * scale, 12.0f * scale), calBg.Get());
+        target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.05f * settingsOpacity_), &calBg);
+        
+        // Left Card Container
+        D2D1_RECT_F leftBlock = D2D1::RectF(rect.left + 20.0f * scale, rect.top + 16.0f * scale,
+                                            rect.left + 125.0f * scale, rect.bottom - 16.0f * scale);
+        target_->FillRoundedRectangle(D2D1::RoundedRect(leftBlock, 14.0f * scale, 14.0f * scale), calBg.Get());
         
         ComPtr<ID2D1SolidColorBrush> calHeader;
-        target_->CreateSolidColorBrush(D2D1::ColorF(0.85f, 0.25f, 0.20f, 0.9f * settingsOpacity_), &calHeader);
+        target_->CreateSolidColorBrush(D2D1::ColorF(0.88f, 0.26f, 0.22f, 1.0f * settingsOpacity_), &calHeader);
         
+        // 1. Month Name ("JULY") - Top Left
         wchar_t monthName[32] = {};
         GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, 0, &local, L"MMMM", monthName, ARRAYSIZE(monthName), nullptr);
         for (int i = 0; monthName[i]; ++i) monthName[i] = towupper(monthName[i]);
         
-        target_->DrawTextW(monthName, static_cast<UINT32>(wcslen(monthName)), boldTextFormat_.Get(),
-                           D2D1::RectF(leftBlock.left, leftBlock.top + 6.0f * scale, leftBlock.right, leftBlock.top + 24.0f * scale),
-                           calHeader.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+        if (boldTextFormat_) {
+            boldTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            target_->DrawTextW(monthName, static_cast<UINT32>(wcslen(monthName)), boldTextFormat_.Get(),
+                               D2D1::RectF(leftBlock.left, leftBlock.top + 12.0f * scale, leftBlock.right, leftBlock.top + 28.0f * scale),
+                               calHeader.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+            boldTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        }
 
+        // 2. Year ("2026") - Below Month without overlap
         wchar_t yearStr[16] = {};
         swprintf_s(yearStr, L"%d", local.wYear);
-        mutedBrush_->SetOpacity(0.45f);
-        target_->DrawTextW(yearStr, static_cast<UINT32>(wcslen(yearStr)), boldTextFormat_.Get(),
-                           D2D1::RectF(leftBlock.left, leftBlock.top + 20.0f * scale, leftBlock.right, leftBlock.top + 38.0f * scale),
-                           mutedBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+        mutedBrush_->SetOpacity(0.60f);
+        if (smallTextFormat_) {
+            smallTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            target_->DrawTextW(yearStr, static_cast<UINT32>(wcslen(yearStr)), smallTextFormat_.Get(),
+                               D2D1::RectF(leftBlock.left, leftBlock.top + 28.0f * scale, leftBlock.right, leftBlock.top + 42.0f * scale),
+                               mutedBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+            smallTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        }
 
+        // 3. Day Number ("21") - Large centered in card
         wchar_t dayStr[16] = {};
         swprintf_s(dayStr, L"%d", local.wDay);
-        textBrush_->SetOpacity(0.96f);
-        target_->DrawTextW(dayStr, static_cast<UINT32>(wcslen(dayStr)), hugeTextFormat_.Get(),
-                           D2D1::RectF(leftBlock.left, leftBlock.top + 30.0f * scale, leftBlock.right, leftBlock.top + 80.0f * scale),
-                           textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+        textBrush_->SetOpacity(0.98f);
+        if (hugeTextFormat_) {
+            hugeTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            hugeTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            target_->DrawTextW(dayStr, static_cast<UINT32>(wcslen(dayStr)), hugeTextFormat_.Get(),
+                               D2D1::RectF(leftBlock.left, leftBlock.top + 42.0f * scale, leftBlock.right, leftBlock.top + 106.0f * scale),
+                               textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+            hugeTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            hugeTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+        }
 
+        // 4. Weekday Name ("Tuesday") - Bottom of card
         wchar_t weekdayName[32] = {};
         GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, 0, &local, L"dddd", weekdayName, ARRAYSIZE(weekdayName), nullptr);
         mutedBrush_->SetOpacity(0.75f);
-        target_->DrawTextW(weekdayName, static_cast<UINT32>(wcslen(weekdayName)), boldTextFormat_.Get(),
-                           D2D1::RectF(leftBlock.left, leftBlock.bottom - 22.0f * scale, leftBlock.right, leftBlock.bottom),
-                           mutedBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
-
-        // Right Grid
-        const float gridStart = rect.left + 144.0f * scale;
-        const float gridTop = rect.top + 30.0f * scale;
-        const float colW = 31.0f * scale;
-        const float rowH = 18.0f * scale;
-        const wchar_t* days[] = {L"S", L"M", L"T", L"W", L"T", L"F", L"S"};
-        
-        for (int i = 0; i < 7; ++i) {
-            D2D1_RECT_F cell = D2D1::RectF(gridStart + i * colW, gridTop, gridStart + (i+1)*colW, gridTop + rowH);
-            ComPtr<ID2D1SolidColorBrush> brush = (i == 0 || i == 6) ? calHeader : mutedBrush_;
-            target_->DrawTextW(days[i], 1, boldTextFormat_.Get(), cell, brush.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+        if (smallTextFormat_) {
+            smallTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            target_->DrawTextW(weekdayName, static_cast<UINT32>(wcslen(weekdayName)), smallTextFormat_.Get(),
+                               D2D1::RectF(leftBlock.left, leftBlock.bottom - 26.0f * scale, leftBlock.right, leftBlock.bottom - 8.0f * scale),
+                               mutedBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+            smallTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
         }
 
-        int startDay = GetDayOfWeek(local.wYear, local.wMonth, 1);
-        int totalDays = GetDaysInMonth(local.wYear, local.wMonth);
+        // ── Right Calendar Grid ──────────────────────────────────────────────
+        const float gridStart = rect.left + 144.0f * scale;
+        const float gridTop = rect.top + 18.0f * scale;
+        const float colW = 30.0f * scale;
+        const float rowH = 22.0f * scale;
+        const wchar_t* days[] = {L"S", L"M", L"T", L"W", L"T", L"F", L"S"};
         
-        int row = 1;
-        int col = startDay;
-        textBrush_->SetOpacity(0.85f);
-        for (int d = 1; d <= totalDays; ++d) {
-            D2D1_RECT_F cell = D2D1::RectF(gridStart + col * colW, gridTop + row * rowH + 4.0f * scale, 
-                                           gridStart + (col+1)*colW, gridTop + (row+1)*rowH + 4.0f * scale);
-            
-            if (d == local.wDay) {
-                target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cell.left + colW*0.5f, cell.top + rowH*0.5f), 10.0f*scale, 10.0f*scale), calHeader.Get());
-                target_->DrawTextW(std::to_wstring(d).c_str(), static_cast<UINT32>(std::to_wstring(d).length()), boldTextFormat_.Get(), cell, textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
-            } else {
-                ComPtr<ID2D1SolidColorBrush> dBrush = (col == 0 || col == 6) ? calHeader : textBrush_;
-                if (col == 0 || col == 6) dBrush->SetOpacity(0.6f);
-                target_->DrawTextW(std::to_wstring(d).c_str(), static_cast<UINT32>(std::to_wstring(d).length()), boldTextFormat_.Get(), cell, dBrush.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+        // Days of week header
+        if (boldTextFormat_) {
+            boldTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            boldTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+
+            for (int i = 0; i < 7; ++i) {
+                D2D1_RECT_F cell = D2D1::RectF(gridStart + i * colW, gridTop, gridStart + (i + 1) * colW, gridTop + rowH);
+                ComPtr<ID2D1SolidColorBrush> brush = (i == 0 || i == 6) ? calHeader : mutedBrush_;
+                target_->DrawTextW(days[i], 1, boldTextFormat_.Get(), cell, brush.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
             }
+
+            int startDay = GetDayOfWeek(local.wYear, local.wMonth, 1);
+            int totalDays = GetDaysInMonth(local.wYear, local.wMonth);
             
-            col++;
-            if (col > 6) { col = 0; row++; }
+            int row = 1;
+            int col = startDay;
+            textBrush_->SetOpacity(0.88f);
+            for (int d = 1; d <= totalDays; ++d) {
+                D2D1_RECT_F cell = D2D1::RectF(gridStart + col * colW, gridTop + row * rowH + 2.0f * scale, 
+                                               gridStart + (col + 1) * colW, gridTop + (row + 1) * rowH + 2.0f * scale);
+                
+                if (d == local.wDay) {
+                    const float circleR = 10.5f * scale;
+                    D2D1_POINT_2F circleCenter = D2D1::Point2F((cell.left + cell.right) * 0.5f, (cell.top + cell.bottom) * 0.5f);
+                    target_->FillEllipse(D2D1::Ellipse(circleCenter, circleR, circleR), calHeader.Get());
+                    
+                    ComPtr<ID2D1SolidColorBrush> whiteBrush;
+                    target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f), &whiteBrush);
+                    std::wstring dStr = std::to_wstring(d);
+                    target_->DrawTextW(dStr.c_str(), static_cast<UINT32>(dStr.length()), boldTextFormat_.Get(), cell, whiteBrush.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+                } else {
+                    ComPtr<ID2D1SolidColorBrush> dBrush = (col == 0 || col == 6) ? calHeader : textBrush_;
+                    if (col == 0 || col == 6) dBrush->SetOpacity(0.65f);
+                    std::wstring dStr = std::to_wstring(d);
+                    target_->DrawTextW(dStr.c_str(), static_cast<UINT32>(dStr.length()), boldTextFormat_.Get(), cell, dBrush.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+                }
+                
+                col++;
+                if (col > 6) { col = 0; row++; }
+            }
+
+            boldTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            boldTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
         }
     }
 
@@ -4367,6 +4634,483 @@ class Renderer {
         }
     }
 
+    void DrawProgressBorder(D2D1_RECT_F rect, float radius, float progress, ID2D1Brush* brush, float strokeWidth) {
+        if (progress <= 0.001f) return;
+        if (progress >= 0.999f) {
+            target_->DrawRoundedRectangle(D2D1::RoundedRect(rect, radius, radius), brush, strokeWidth);
+            return;
+        }
+
+        const float cx = (rect.left + rect.right) * 0.5f;
+        const float w = rect.right - rect.left;
+        const float h = rect.bottom - rect.top;
+        const float r = std::min(radius, std::min(w * 0.5f, h * 0.5f));
+        constexpr float kPi = 3.1415926535f;
+
+        const float lTopHalf = (w - 2.0f * r) * 0.5f;
+        const float lArc = (kPi * 0.5f) * r;
+        const float lSide = h - 2.0f * r;
+        const float lTopFull = w - 2.0f * r;
+
+        const float totalP = 2.0f * lTopFull + 2.0f * lSide + 4.0f * lArc;
+        const float targetP = Clamp(progress, 0.0f, 1.0f) * totalP;
+
+        ComPtr<ID2D1PathGeometry> pathGeo;
+        if (FAILED(d2dFactory_->CreatePathGeometry(&pathGeo))) return;
+
+        ComPtr<ID2D1GeometrySink> sink;
+        if (FAILED(pathGeo->Open(&sink))) return;
+
+        // Counter-clockwise starting from Top Center (cx, rect.top)
+        sink->BeginFigure(D2D1::Point2F(cx, rect.top), D2D1_FIGURE_BEGIN_HOLLOW);
+
+        float curP = 0.0f;
+        bool done = false;
+
+        // 1. Top Center -> Top Left Corner Start
+        if (!done) {
+            float len = lTopHalf;
+            if (curP + len >= targetP) {
+                float frac = (targetP - curP) / len;
+                sink->AddLine(D2D1::Point2F(cx - len * frac, rect.top));
+                done = true;
+            } else {
+                sink->AddLine(D2D1::Point2F(rect.left + r, rect.top));
+                curP += len;
+            }
+        }
+
+        // 2. Top Left Corner Arc
+        if (!done) {
+            float len = lArc;
+            if (curP + len >= targetP) {
+                float frac = (targetP - curP) / len;
+                float angle = -kPi * 0.5f - frac * (kPi * 0.5f);
+                D2D1_POINT_2F pt = D2D1::Point2F((rect.left + r) + r * std::cos(angle), (rect.top + r) + r * std::sin(angle));
+                sink->AddArc(D2D1::ArcSegment(pt, D2D1::SizeF(r, r), 0.0f, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                done = true;
+            } else {
+                sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(rect.left, rect.top + r), D2D1::SizeF(r, r), 0.0f, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                curP += len;
+            }
+        }
+
+        // 3. Left Side
+        if (!done) {
+            float len = lSide;
+            if (curP + len >= targetP) {
+                float frac = (targetP - curP) / len;
+                sink->AddLine(D2D1::Point2F(rect.left, (rect.top + r) + len * frac));
+                done = true;
+            } else {
+                sink->AddLine(D2D1::Point2F(rect.left, rect.bottom - r));
+                curP += len;
+            }
+        }
+
+        // 4. Bottom Left Corner Arc
+        if (!done) {
+            float len = lArc;
+            if (curP + len >= targetP) {
+                float frac = (targetP - curP) / len;
+                float angle = kPi - frac * (kPi * 0.5f);
+                D2D1_POINT_2F pt = D2D1::Point2F((rect.left + r) + r * std::cos(angle), (rect.bottom - r) + r * std::sin(angle));
+                sink->AddArc(D2D1::ArcSegment(pt, D2D1::SizeF(r, r), 0.0f, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                done = true;
+            } else {
+                sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(rect.left + r, rect.bottom), D2D1::SizeF(r, r), 0.0f, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                curP += len;
+            }
+        }
+
+        // 5. Bottom Side
+        if (!done) {
+            float len = lTopFull;
+            if (curP + len >= targetP) {
+                float frac = (targetP - curP) / len;
+                sink->AddLine(D2D1::Point2F((rect.left + r) + len * frac, rect.bottom));
+                done = true;
+            } else {
+                sink->AddLine(D2D1::Point2F(rect.right - r, rect.bottom));
+                curP += len;
+            }
+        }
+
+        // 6. Bottom Right Corner Arc
+        if (!done) {
+            float len = lArc;
+            if (curP + len >= targetP) {
+                float frac = (targetP - curP) / len;
+                float angle = kPi * 0.5f - frac * (kPi * 0.5f);
+                D2D1_POINT_2F pt = D2D1::Point2F((rect.right - r) + r * std::cos(angle), (rect.bottom - r) + r * std::sin(angle));
+                sink->AddArc(D2D1::ArcSegment(pt, D2D1::SizeF(r, r), 0.0f, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                done = true;
+            } else {
+                sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(rect.right, rect.bottom - r), D2D1::SizeF(r, r), 0.0f, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                curP += len;
+            }
+        }
+
+        // 7. Right Side
+        if (!done) {
+            float len = lSide;
+            if (curP + len >= targetP) {
+                float frac = (targetP - curP) / len;
+                sink->AddLine(D2D1::Point2F(rect.right, (rect.bottom - r) - len * frac));
+                done = true;
+            } else {
+                sink->AddLine(D2D1::Point2F(rect.right, rect.top + r));
+                curP += len;
+            }
+        }
+
+        // 8. Top Right Corner Arc
+        if (!done) {
+            float len = lArc;
+            if (curP + len >= targetP) {
+                float frac = (targetP - curP) / len;
+                float angle = 0.0f - frac * (kPi * 0.5f);
+                D2D1_POINT_2F pt = D2D1::Point2F((rect.right - r) + r * std::cos(angle), (rect.top + r) + r * std::sin(angle));
+                sink->AddArc(D2D1::ArcSegment(pt, D2D1::SizeF(r, r), 0.0f, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                done = true;
+            } else {
+                sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(rect.right - r, rect.top), D2D1::SizeF(r, r), 0.0f, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE, D2D1_ARC_SIZE_SMALL));
+                curP += len;
+            }
+        }
+
+        // 9. Top Right -> Top Center
+        if (!done) {
+            float len = lTopHalf;
+            if (curP + len >= targetP) {
+                float frac = (targetP - curP) / len;
+                sink->AddLine(D2D1::Point2F((rect.right - r) - len * frac, rect.top));
+            } else {
+                sink->AddLine(D2D1::Point2F(cx, rect.top));
+            }
+        }
+
+        sink->EndFigure(D2D1_FIGURE_END_OPEN);
+        sink->Close();
+
+        ComPtr<ID2D1StrokeStyle> roundStroke;
+        D2D1_STROKE_STYLE_PROPERTIES sp = D2D1::StrokeStyleProperties(
+            D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND,
+            D2D1_LINE_JOIN_ROUND, 10.0f, D2D1_DASH_STYLE_SOLID, 0.0f);
+        d2dFactory_->CreateStrokeStyle(&sp, nullptr, 0, &roundStroke);
+
+        target_->DrawGeometry(pathGeo.Get(), brush, strokeWidth, roundStroke.Get());
+    }
+
+    void DrawTimer(const SharedState& state, D2D1_RECT_F rect, double now) {
+        const float height = rect.bottom - rect.top;
+        const float width = rect.right - rect.left;
+
+        double remainingSecs = 0.0;
+        if (state.timer.paused) {
+            remainingSecs = state.timer.remaining;
+        } else {
+            remainingSecs = std::max(0.0, state.timer.targetTime - now);
+        }
+
+        const double duration = state.timer.duration > 0.0 ? state.timer.duration : 1.0;
+        const float progress = Clamp(static_cast<float>(remainingSecs / duration), 0.0f, 1.0f);
+
+        const int totalSecs = static_cast<int>(std::ceil(remainingSecs));
+        const int hrs = totalSecs / 3600;
+        const int mins = (totalSecs % 3600) / 60;
+        const int secs = totalSecs % 60;
+
+        wchar_t timeBuf[32] = {};
+        if (hrs > 0) {
+            swprintf_s(timeBuf, L"%02d:%02d:%02d", hrs, mins, secs);
+        } else {
+            swprintf_s(timeBuf, L"%02d:%02d", mins, secs);
+        }
+
+        ComPtr<ID2D1SolidColorBrush> orangeBrush;
+        target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 0.584f, 0.0f, settingsOpacity_), &orangeBrush);
+
+        if (height < 60.0f) {
+            // ── Collapsed State ──
+            const float cy = (rect.top + rect.bottom) * 0.5f;
+            const float ringX = rect.left + 22.0f;
+            const float ringR = 9.0f;
+            const float strokeW = 2.5f;
+
+            ComPtr<ID2D1SolidColorBrush> trackBrush;
+            target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.15f * settingsOpacity_), &trackBrush);
+            target_->DrawEllipse(D2D1::Ellipse(D2D1::Point2F(ringX, cy), ringR, ringR), trackBrush.Get(), strokeW);
+
+            if (progress > 0.001f) {
+                ComPtr<ID2D1PathGeometry> arcGeo;
+                d2dFactory_->CreatePathGeometry(&arcGeo);
+                ComPtr<ID2D1GeometrySink> sink;
+                if (arcGeo && SUCCEEDED(arcGeo->Open(&sink))) {
+                    const float startAngle = -1.5707963f;
+                    const float endAngle = startAngle + (progress * 6.2831853f);
+
+                    D2D1_POINT_2F startPt = D2D1::Point2F(ringX + ringR * std::cos(startAngle), cy + ringR * std::sin(startAngle));
+                    D2D1_POINT_2F endPt = D2D1::Point2F(ringX + ringR * std::cos(endAngle), cy + ringR * std::sin(endAngle));
+
+                    sink->BeginFigure(startPt, D2D1_FIGURE_BEGIN_HOLLOW);
+                    sink->AddArc(D2D1::ArcSegment(
+                        endPt,
+                        D2D1::SizeF(ringR, ringR),
+                        0.0f,
+                        D2D1_SWEEP_DIRECTION_CLOCKWISE,
+                        progress > 0.5f ? D2D1_ARC_SIZE_LARGE : D2D1_ARC_SIZE_SMALL
+                    ));
+                    sink->EndFigure(D2D1_FIGURE_END_OPEN);
+                    sink->Close();
+                    target_->DrawGeometry(arcGeo.Get(), orangeBrush.Get(), strokeW);
+                }
+            }
+
+            D2D1_RECT_F textRect = D2D1::RectF(rect.right - 80.0f, cy - 11.0f, rect.right - 14.0f, cy + 11.0f);
+            if (mediaArtistFormat_) {
+                mediaArtistFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+                target_->DrawTextW(timeBuf, static_cast<UINT32>(wcslen(timeBuf)), mediaArtistFormat_.Get(), textRect, orangeBrush.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                mediaArtistFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            }
+        } else {
+            // ── Expanded State (Matches exact concept UI design) ──
+            const float radius = g_settings.w11Style ? 8.0f : 44.0f;
+
+            // Inset crisp stroke border
+            D2D1_RECT_F insetRect = D2D1::RectF(rect.left + 2.0f, rect.top + 2.0f, rect.right - 2.0f, rect.bottom - 2.0f);
+            float insetRadius = std::max(2.0f, radius - 2.0f);
+
+            // Dark perimeter track border
+            ComPtr<ID2D1SolidColorBrush> trackBorderBrush;
+            target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.12f * settingsOpacity_), &trackBorderBrush);
+            target_->DrawRoundedRectangle(D2D1::RoundedRect(insetRect, insetRadius, insetRadius), trackBorderBrush.Get(), 3.5f);
+
+            // Dynamic decreasing orange progress border stroke around rounded rectangle
+            DrawProgressBorder(insetRect, insetRadius, progress, orangeBrush.Get(), 3.5f);
+
+            const float cx = (rect.left + rect.right) * 0.5f;
+            const float cy = (rect.top + rect.bottom) * 0.5f;
+
+            // Top Center: Bell Icon + Target Completion End Time (🔔 14:44)
+            wchar_t timeText[16] = {};
+            swprintf_s(timeText, L"%02d:%02d", state.timer.endTime.wHour, state.timer.endTime.wMinute);
+            
+            float iconSz = 14.0f;
+            float textW = 34.0f;
+            float totalW = iconSz + 6.0f + textW;
+            float startX = cx - totalW * 0.5f;
+            
+            // Draw bell icon (\uE7ED in Segoe MDL2 Assets)
+            D2D1_RECT_F bellRect = D2D1::RectF(startX, rect.top + 10.0f, startX + iconSz, rect.top + 24.0f);
+            if (iconFormat_) {
+                iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                iconFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                target_->DrawTextW(L"\uE7ED", 1, iconFormat_.Get(), bellRect, mutedBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+                iconFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            }
+            
+            // Draw end time text using smallTextFormat_
+            D2D1_RECT_F topHeaderRect = D2D1::RectF(startX + iconSz + 6.0f, rect.top + 9.0f, startX + totalW + 20.0f, rect.top + 25.0f);
+            if (smallTextFormat_) {
+                target_->DrawTextW(timeText, static_cast<UINT32>(wcslen(timeText)), smallTextFormat_.Get(), topHeaderRect, mutedBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+            }
+
+            // Center Main Timer Text (13:12) - Bold, 34pt
+            D2D1_RECT_F mainTimerRect = D2D1::RectF(rect.left, cy - 22.0f, rect.right, cy + 18.0f);
+            if (hugeTextFormat_) {
+                hugeTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                hugeTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                target_->DrawTextW(timeBuf, static_cast<UINT32>(wcslen(timeBuf)), hugeTextFormat_.Get(), mainTimerRect, textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                hugeTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+                hugeTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            } else if (clockFormat_) {
+                clockFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                clockFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                target_->DrawTextW(timeBuf, static_cast<UINT32>(wcslen(timeBuf)), clockFormat_.Get(), mainTimerRect, textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                clockFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+                clockFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            }
+
+            // Subtitle below center timer: "Timer"
+            D2D1_RECT_F subTitleRect = D2D1::RectF(rect.left, cy + 18.0f, rect.right, cy + 32.0f);
+            if (smallTextFormat_) {
+                smallTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                target_->DrawTextW(L"Timer", 5, smallTextFormat_.Get(), subTitleRect, mutedBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                smallTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            }
+
+            // Calculate mouse hover states for dynamic button response
+            POINT cursor = {};
+            GetCursorPos(&cursor);
+            ScreenToClient(hwnd_, &cursor);
+            float totalScale = (GetDpiForWindow(hwnd_) / 96.0f) * g_settings.sizeScale;
+            float unX = (cursor.x - cx) / totalScale;
+            float unY = (cursor.y - cy) / totalScale;
+
+            const float btnY = cy;
+            const float btnR = 27.0f;
+            const float leftBtnX = cx - 96.0f;
+            const float rightBtnX = cx + 96.0f;
+
+            bool leftHover = ((unX - (-96.0f)) * (unX - (-96.0f)) + (unY - 0.0f) * (unY - 0.0f)) <= (30.0f * 30.0f);
+            bool rightHover = ((unX - 96.0f) * (unX - 96.0f) + (unY - 0.0f) * (unY - 0.0f)) <= (30.0f * 30.0f);
+
+            // Left Circular Button (Pause / Play)
+            ComPtr<ID2D1SolidColorBrush> pauseBgBrush;
+            if (leftHover) {
+                target_->CreateSolidColorBrush(D2D1::ColorF(0.28f, 0.28f, 0.32f, 1.0f * settingsOpacity_), &pauseBgBrush);
+            } else {
+                target_->CreateSolidColorBrush(D2D1::ColorF(0.172f, 0.172f, 0.180f, 0.95f * settingsOpacity_), &pauseBgBrush);
+            }
+            target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(leftBtnX, btnY), btnR, btnR), pauseBgBrush.Get());
+
+            ComPtr<ID2D1SolidColorBrush> whiteIconBrush;
+            target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f), &whiteIconBrush);
+
+            if (!state.timer.paused) {
+                // Vector rounded Pause bars ||
+                D2D1_RECT_F leftBar = D2D1::RectF(leftBtnX - 6.5f, btnY - 9.0f, leftBtnX - 2.0f, btnY + 9.0f);
+                D2D1_RECT_F rightBar = D2D1::RectF(leftBtnX + 2.0f, btnY - 9.0f, leftBtnX + 6.5f, btnY + 9.0f);
+                target_->FillRoundedRectangle(D2D1::RoundedRect(leftBar, 2.0f, 2.0f), whiteIconBrush.Get());
+                target_->FillRoundedRectangle(D2D1::RoundedRect(rightBar, 2.0f, 2.0f), whiteIconBrush.Get());
+            } else {
+                // Vector Play triangle ▶
+                ComPtr<ID2D1PathGeometry> playGeo;
+                if (SUCCEEDED(d2dFactory_->CreatePathGeometry(&playGeo))) {
+                    ComPtr<ID2D1GeometrySink> sink;
+                    if (SUCCEEDED(playGeo->Open(&sink))) {
+                        sink->BeginFigure(D2D1::Point2F(leftBtnX - 5.0f, btnY - 9.0f), D2D1_FIGURE_BEGIN_FILLED);
+                        sink->AddLine(D2D1::Point2F(leftBtnX - 5.0f, btnY + 9.0f));
+                        sink->AddLine(D2D1::Point2F(leftBtnX + 8.5f, btnY));
+                        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                        sink->Close();
+                        target_->FillGeometry(playGeo.Get(), whiteIconBrush.Get());
+                    }
+                }
+            }
+
+            // Right Circular Button (Cancel 'X')
+            ComPtr<ID2D1SolidColorBrush> cancelBgBrush;
+            if (rightHover) {
+                target_->CreateSolidColorBrush(D2D1::ColorF(0.32f, 0.12f, 0.11f, 1.0f * settingsOpacity_), &cancelBgBrush);
+            } else {
+                target_->CreateSolidColorBrush(D2D1::ColorF(0.227f, 0.098f, 0.090f, 0.95f * settingsOpacity_), &cancelBgBrush);
+            }
+            target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(rightBtnX, btnY), btnR, btnR), cancelBgBrush.Get());
+
+            ComPtr<ID2D1SolidColorBrush> brightRedBrush;
+            target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 0.271f, 0.227f, 1.0f), &brightRedBrush);
+
+            ComPtr<ID2D1StrokeStyle> capStroke;
+            D2D1_STROKE_STYLE_PROPERTIES sp = D2D1::StrokeStyleProperties(
+                D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND, D2D1_CAP_STYLE_ROUND,
+                D2D1_LINE_JOIN_ROUND, 10.0f, D2D1_DASH_STYLE_SOLID, 0.0f);
+            d2dFactory_->CreateStrokeStyle(&sp, nullptr, 0, &capStroke);
+
+            target_->DrawLine(D2D1::Point2F(rightBtnX - 7.0f, btnY - 7.0f), D2D1::Point2F(rightBtnX + 7.0f, btnY + 7.0f), brightRedBrush.Get(), 3.5f, capStroke.Get());
+            target_->DrawLine(D2D1::Point2F(rightBtnX - 7.0f, btnY + 7.0f), D2D1::Point2F(rightBtnX + 7.0f, btnY - 7.0f), brightRedBrush.Get(), 3.5f, capStroke.Get());
+        }
+    }
+
+    void DrawTimerDashboard(const SharedState& state, D2D1_RECT_F rect, const Settings& settings, double now, float scale) {
+        const float cx = (rect.left + rect.right) * 0.5f;
+
+        // Title Header (⏱ Select Timer) - Fix missing box glyph
+        D2D1_RECT_F titleRect = D2D1::RectF(rect.left, rect.top + 14.0f * scale, rect.right, rect.top + 36.0f * scale);
+        if (textFormat_) {
+            textFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            target_->DrawTextW(L"⏱ Select Timer", 14, textFormat_.Get(), titleRect, textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+            textFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        }
+
+        struct Preset { const wchar_t* label; int minutes; };
+        static constexpr Preset kPresets[] = {
+            {L"15m", 15}, {L"30m", 30}, {L"60m", 60}, {L"100m", 100}
+        };
+
+        const float startY = rect.top + 46.0f * scale;
+        const float itemW = 78.0f * scale;
+        const float itemH = 40.0f * scale;
+        const float gap = 12.0f * scale;
+        const float totalGridW = 4 * itemW + 3 * gap;
+        float gridX = cx - totalGridW * 0.5f;
+
+        POINT cursor = {};
+        GetCursorPos(&cursor);
+        ScreenToClient(hwnd_, &cursor);
+
+        ComPtr<ID2D1SolidColorBrush> btnBgBrush;
+        target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.08f * settingsOpacity_), &btnBgBrush);
+
+        ComPtr<ID2D1SolidColorBrush> btnHoverBrush;
+        target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.18f * settingsOpacity_), &btnHoverBrush);
+
+        ComPtr<ID2D1SolidColorBrush> orangeBrush;
+        target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 0.584f, 0.0f, 1.0f), &orangeBrush);
+
+        for (size_t i = 0; i < ARRAYSIZE(kPresets); ++i) {
+            D2D1_RECT_F btnRect = D2D1::RectF(gridX, startY, gridX + itemW, startY + itemH);
+            bool isHover = (cursor.x >= btnRect.left && cursor.x <= btnRect.right && cursor.y >= btnRect.top && cursor.y <= btnRect.bottom);
+            bool isSelected = (state.timer.customMinutes == kPresets[i].minutes);
+
+            if (isSelected) {
+                ComPtr<ID2D1SolidColorBrush> selectedBg;
+                target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 0.584f, 0.0f, 0.20f * settingsOpacity_), &selectedBg);
+                target_->FillRoundedRectangle(D2D1::RoundedRect(btnRect, 10.0f * scale, 10.0f * scale), selectedBg.Get());
+                target_->DrawRoundedRectangle(D2D1::RoundedRect(btnRect, 10.0f * scale, 10.0f * scale), orangeBrush.Get(), 1.5f * scale);
+            } else {
+                target_->FillRoundedRectangle(D2D1::RoundedRect(btnRect, 10.0f * scale, 10.0f * scale), isHover ? btnHoverBrush.Get() : btnBgBrush.Get());
+            }
+
+            if (smallTextFormat_) {
+                smallTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                target_->DrawTextW(kPresets[i].label, static_cast<UINT32>(wcslen(kPresets[i].label)), smallTextFormat_.Get(), D2D1::RectF(btnRect.left, btnRect.top + 9.0f * scale, btnRect.right, btnRect.bottom), textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                smallTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            }
+            gridX += itemW + gap;
+        }
+
+        const float row2Y = startY + itemH + 18.0f * scale;
+        const float row2H = 50.0f * scale;
+
+        // Custom Time Picker Pill (- 05:00 +)
+        D2D1_RECT_F customRect = D2D1::RectF(cx - 171.0f * scale, row2Y, cx - 10.0f * scale, row2Y + row2H);
+        target_->FillRoundedRectangle(D2D1::RoundedRect(customRect, 14.0f * scale, 14.0f * scale), btnBgBrush.Get());
+
+        // Draw - and + labels cleanly inside picker
+        wchar_t customBuf[32] = {};
+        swprintf_s(customBuf, L"−    %02d:00    +", state.timer.customMinutes);
+        if (textFormat_) {
+            textFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            target_->DrawTextW(customBuf, static_cast<UINT32>(wcslen(customBuf)), textFormat_.Get(), D2D1::RectF(customRect.left, customRect.top + 13.0f * scale, customRect.right, customRect.bottom), textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+            textFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        }
+
+        // START Button (Bright iOS Orange)
+        D2D1_RECT_F startBtnRect = D2D1::RectF(cx + 10.0f * scale, row2Y, cx + 171.0f * scale, row2Y + row2H);
+        bool startHover = (cursor.x >= startBtnRect.left && cursor.x <= startBtnRect.right && cursor.y >= startBtnRect.top && cursor.y <= startBtnRect.bottom);
+        
+        ComPtr<ID2D1SolidColorBrush> startBgBrush;
+        if (startHover) {
+            target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 0.63f, 0.0f, 1.0f), &startBgBrush);
+        } else {
+            target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 0.584f, 0.0f, 1.0f), &startBgBrush);
+        }
+        target_->FillRoundedRectangle(D2D1::RoundedRect(startBtnRect, 14.0f * scale, 14.0f * scale), startBgBrush.Get());
+        
+        if (boldTextFormat_) {
+            boldTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            target_->DrawTextW(L"START", 5, boldTextFormat_.Get(), D2D1::RectF(startBtnRect.left, startBtnRect.top + 14.0f * scale, startBtnRect.right, startBtnRect.bottom), textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+            boldTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        } else if (textFormat_) {
+            textFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            target_->DrawTextW(L"START", 5, textFormat_.Get(), D2D1::RectF(startBtnRect.left, startBtnRect.top + 14.0f * scale, startBtnRect.right, startBtnRect.bottom), textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+            textFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        }
+    }
+
     void DrawIdleDashboard(const SharedState& state, D2D1_RECT_F rect, const Settings& settings,
                            double now) {
         if (settings.gameOverlay || Wh_GetIntValue(L"GameOverlayPinned", 0) != 0) {
@@ -4395,39 +5139,60 @@ class Renderer {
         }
 
         if (width / scale < 220.0f) {
-            // Collapsed Mode
-            D2D1_RECT_F timeRect = D2D1::RectF(rect.left + 20.0f * scale, rect.top + 7.0f * scale,
-                                               rect.left + 80.0f * scale, rect.bottom - 7.0f * scale);
-            textBrush_->SetOpacity(0.96f);
-            target_->DrawTextW(timeBuf, static_cast<UINT32>(wcslen(timeBuf)), smallTextFormat_.Get(),
-                               timeRect, textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
-            
-            ComPtr<ID2D1SolidColorBrush> divider;
-            target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.12f * settingsOpacity_), &divider);
-            target_->FillRoundedRectangle(
-                D2D1::RoundedRect(D2D1::RectF(rect.left + 82.0f * scale, rect.top + 10.0f * scale,
-                                               rect.left + 83.5f * scale, rect.bottom - 10.0f * scale),
-                                  0.5f * scale, 0.5f * scale), divider.Get());
+            // Collapsed Mode (Apple Dynamic Island Status Bar)
+            const float cy = (rect.top + rect.bottom) * 0.5f;
+            const float cx = (rect.left + rect.right) * 0.5f;
 
+            // 1. Time Display (Left Slot)
+            D2D1_RECT_F timeRect = D2D1::RectF(rect.left + 10.0f * scale, cy - 12.0f * scale,
+                                               cx - 8.0f * scale, cy + 12.0f * scale);
+            textBrush_->SetOpacity(0.96f);
+            if (smallTextFormat_) {
+                smallTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                smallTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                target_->DrawTextW(timeBuf, static_cast<UINT32>(wcslen(timeBuf)), smallTextFormat_.Get(),
+                                   timeRect, textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+                smallTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+                smallTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            }
+
+            // 2. Vertical Divider Line (Center)
+            ComPtr<ID2D1SolidColorBrush> divider;
+            target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.18f * settingsOpacity_), &divider);
+            target_->FillRoundedRectangle(
+                D2D1::RoundedRect(D2D1::RectF(cx - 0.75f * scale, cy - 9.0f * scale,
+                                               cx + 0.75f * scale, cy + 9.0f * scale),
+                                  0.75f * scale, 0.75f * scale), divider.Get());
+
+            // 3. Weather Display (Right Slot)
             wchar_t weatherLabel[32] = {};
             if (hasWeather) swprintf_s(weatherLabel, L"%s %.0f\x00B0", wIcon.c_str(), state.weather.temperature);
             else wcscpy_s(weatherLabel, ARRAYSIZE(weatherLabel), L"🌡️ --\x00B0");
 
-            D2D1_RECT_F wRect = D2D1::RectF(rect.left + 94.0f * scale, rect.top + 7.0f * scale,
-                                            rect.right, rect.bottom - 7.0f * scale);
-            target_->DrawTextW(weatherLabel, static_cast<UINT32>(wcslen(weatherLabel)), smallTextFormat_.Get(),
-                               wRect, textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+            D2D1_RECT_F wRect = D2D1::RectF(cx + 8.0f * scale, cy - 12.0f * scale,
+                                            rect.right - 10.0f * scale, cy + 12.0f * scale);
+            if (smallTextFormat_) {
+                smallTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                smallTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                target_->DrawTextW(weatherLabel, static_cast<UINT32>(wcslen(weatherLabel)), smallTextFormat_.Get(),
+                                   wRect, textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+                smallTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+                smallTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            }
+
             textBrush_->SetOpacity(1.0f);
             target_->PopAxisAlignedClip();
             return;
         }
 
-        // Expanded Mode
-        int tab = g_idleTab % 3;
-        if (tab < 0) tab += 3;
+        // Expanded Mode (5 Dashboards: Flip Clock, Calendar, Weather, Quick Timer, Notifications)
+        int tab = g_idleTab % 5;
+        if (tab < 0) tab += 5;
 
-        if (tab == 0) DrawCalendarDashboard(state, rect, settings, now, scale, local);
-        else if (tab == 1) DrawWeatherDashboard(state, rect, settings, now, scale, hasWeather, wIcon, wText);
+        if (tab == 0) DrawFlipClockDashboard(state, rect, settings, now, scale, local);
+        else if (tab == 1) DrawCalendarDashboard(state, rect, settings, now, scale, local);
+        else if (tab == 2) DrawWeatherDashboard(state, rect, settings, now, scale, hasWeather, wIcon, wText);
+        else if (tab == 3) DrawTimerDashboard(state, rect, settings, now, scale);
         else DrawNotificationDashboard(state, rect, settings, now, scale);
 
         // Pagination dots (Vertical on the right edge)
@@ -4437,18 +5202,9 @@ class Renderer {
         } else if (state.system.micActive || state.system.cameraActive) {
             shiftX = 16.0f * scale;
         }
-        const float dotX = rect.right - 10.0f * scale - shiftX;
-        const float dotY = (rect.top + rect.bottom) * 0.5f;
-        const float spacing = 8.0f * scale;
-        const float r = 2.5f * scale;
-        
-        ComPtr<ID2D1SolidColorBrush> activeDot, inactiveDot;
-        target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.85f * settingsOpacity_), &activeDot);
-        target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.25f * settingsOpacity_), &inactiveDot);
-
-        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY - spacing), r, r), tab == 0 ? activeDot.Get() : inactiveDot.Get());
-        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY), r, r), tab == 1 ? activeDot.Get() : inactiveDot.Get());
-        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY + spacing), r, r), tab == 2 ? activeDot.Get() : inactiveDot.Get());
+        DrawPageDots(D2D1::RectF(rect.right - 18.0f * scale - shiftX, rect.top + 20.0f * scale,
+                                 rect.right - 6.0f * scale - shiftX, rect.bottom - 20.0f * scale),
+                     tab, 5, scale);
 
         target_->PopAxisAlignedClip();
     }
@@ -4959,8 +5715,8 @@ class Renderer {
         if (expandedAlpha > 0.01f && mask && layer) {
             target_->PushLayer(D2D1::LayerParameters(rect, mask.Get(), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1::IdentityMatrix(), expandedAlpha, nullptr, D2D1_LAYER_OPTIONS_NONE), layer.Get());
             
-            int tab = g_idleTab % 4;
-            if (tab < 0) tab += 4;
+            int tab = g_idleTab % 5;
+            if (tab < 0) tab += 5;
 
             if (tab == 0) {
                 // ── Background album art (covers the entire pill, fades to dark on left) ──
@@ -5229,6 +5985,8 @@ class Renderer {
                 }
                 DrawWeatherDashboard(state, rect, g_settings, now, 1.0f, hasWeather, wIcon, wText);
             } else if (tab == 3) {
+                DrawTimerDashboard(state, rect, g_settings, now, 1.0f);
+            } else if (tab == 4) {
                 DrawNotificationDashboard(state, rect, g_settings, now, 1.0f);
             }
 
@@ -5240,6 +5998,9 @@ class Renderer {
             } else if (state.system.micActive || state.system.cameraActive) {
                 shiftX = 16.0f * scale;
             }
+            DrawPageDots(D2D1::RectF(rect.right - 18.0f * scale - shiftX, rect.top + 20.0f * scale,
+                                     rect.right - 6.0f * scale - shiftX, rect.bottom - 20.0f * scale),
+                         tab, 5, scale);
             const float dotX = rect.right - 10.0f * scale - shiftX;
             const float dotY = (rect.top + rect.bottom) * 0.5f;
             const float spacing = 8.0f * scale;
@@ -6229,6 +6990,7 @@ class Renderer {
     ComPtr<IDWriteTextFormat> smallTextFormat_;
     ComPtr<IDWriteTextFormat> boldTextFormat_;
     ComPtr<IDWriteTextFormat> hugeTextFormat_;
+    ComPtr<IDWriteTextFormat> flipClockFormat_;
     ComPtr<IDWriteTextFormat> clockFormat_;
     ComPtr<IDWriteTextFormat> iconFormat_;
     ComPtr<IDWriteTextFormat> mediaTitleFormat_;
@@ -6296,6 +7058,10 @@ Activity ActivityForKind(IslandKind kind, const Settings& settings, const Shared
             activity.width = 360.0f;
             activity.height = 64.0f;
             break;
+        case IslandKind::Timer:
+            activity.width = 340.0f;
+            activity.height = 116.0f;
+            break;
         case IslandKind::Idle:
         default:
             if (settings.autoHideIdleSeconds == -1 && !state.system.micActive && !state.system.cameraActive) {
@@ -6318,6 +7084,11 @@ std::vector<IslandKind> ChooseActivities(const SharedState& state, const Setting
 
     if (state.incomingCall.active && now < state.incomingCall.expiresAt) {
         activities.push_back(IslandKind::Call);
+        return activities;
+    }
+    if (state.timer.active) {
+        activities.push_back(IslandKind::Timer);
+        return activities;
     }
     if (state.clipboard.active && now < state.clipboard.expiresAt) {
         activities.push_back(IslandKind::Clipboard);
@@ -6946,6 +7717,8 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 int xPos = GET_X_LPARAM(lParam);
                 int yPos = GET_Y_LPARAM(lParam);
 
+                float totalScale = (GetDpiForWindow(hwnd) / 96.0f) * g_settings.sizeScale;
+
                 bool expanded = Wh_GetIntValue(L"PinnedExpanded", 0) != 0 || g_clickExpanded.load();
                 Wh_Log(L"OverlayWndProc: WM_LBUTTONUP xPos=%d, yPos=%d, expandOnHover=%d, expanded=%d",
                        xPos, yPos, g_settings.expandOnHover, expanded);
@@ -6976,7 +7749,6 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 }
 
                 if (callActive && !kinds.empty() && kinds[0] == IslandKind::Call) {
-                    float totalScale = (GetDpiForWindow(hwnd) / 96.0f) * g_settings.sizeScale;
                     float cx = width / 2.0f;
                     float cy = height / 2.0f;
                     
@@ -7054,8 +7826,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     }
                 }
 
-                if (mediaActive && height > 60.0f && (g_idleTab % 4) == 0) {
-                    float totalScale = (GetDpiForWindow(hwnd) / 96.0f) * g_settings.sizeScale;
+                if (mediaActive && height > 140.0f * totalScale && (g_idleTab % 5) == 0) {
                     float cx = width / 2.0f;
                     float cy = height / 2.0f;
                     
@@ -7104,16 +7875,108 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     }
                 }
 
+                // Clicks inside active expanded Timer (IslandKind::Timer)
+                bool timerActive = false;
+                {
+                    std::lock_guard lock(g_stateMutex);
+                    timerActive = g_state.timer.active;
+                }
+
+                if (timerActive && !kinds.empty() && kinds[0] == IslandKind::Timer && height > 90.0f * totalScale) {
+                    float cx = width / 2.0f;
+                    float cy = height / 2.0f;
+                    float unX = (xPos - cx) / totalScale;
+                    float unY = (yPos - cy) / totalScale;
+
+                    float distLeftSq = (unX - (-96.0f)) * (unX - (-96.0f)) + (unY - 4.0f) * (unY - 4.0f);
+                    if (distLeftSq <= 36.0f * 36.0f) {
+                        std::lock_guard lock(g_stateMutex);
+                        if (g_state.timer.paused) {
+                            g_state.timer.paused = false;
+                            g_state.timer.targetTime = NowSeconds() + g_state.timer.remaining;
+                        } else {
+                            g_state.timer.paused = true;
+                            g_state.timer.remaining = std::max(0.0, g_state.timer.targetTime - NowSeconds());
+                        }
+                        g_layoutDirty = true;
+                        return 0;
+                    }
+                    float distRightSq = (unX - 96.0f) * (unX - 96.0f) + (unY - 4.0f) * (unY - 4.0f);
+                    if (distRightSq <= 36.0f * 36.0f) {
+                        std::lock_guard lock(g_stateMutex);
+                        g_state.timer.active = false;
+                        g_layoutDirty = true;
+                        return 0;
+                    }
+                }
+
+                // Clicks inside Timer Dashboard Tab
+                bool isTimerTab = false;
+                if (mediaActive && (g_idleTab % 6) == 4) isTimerTab = true;
+                else if (!mediaActive && (g_idleTab % 5) == 3) isTimerTab = true;
+
+                if (isTimerTab && height > 140.0f * totalScale) {
+                    float cx = width / 2.0f;
+                    float cy = height / 2.0f;
+                    float unX = (xPos - cx) / totalScale;
+                    float unY = (yPos - cy) / totalScale;
+
+                    const float startY = -46.0f;
+                    const float itemW = 78.0f;
+                    const float itemH = 40.0f;
+                    const float gap = 12.0f;
+                    const float totalGridW = 4 * itemW + 3 * gap;
+                    float gridX = -totalGridW * 0.5f;
+
+                    if (unY >= startY && unY <= startY + itemH) {
+                        static constexpr int kPresetSecs[] = {900, 1800, 3600, 6000};
+                        static constexpr int kPresetMins[] = {15, 30, 60, 100};
+                        for (size_t i = 0; i < ARRAYSIZE(kPresetSecs); ++i) {
+                            if (unX >= gridX && unX <= gridX + itemW) {
+                                {
+                                    std::lock_guard lock(g_stateMutex);
+                                    g_state.timer.customMinutes = kPresetMins[i];
+                                }
+                                StartTimer(kPresetSecs[i]);
+                                return 0;
+                            }
+                            gridX += itemW + gap;
+                        }
+                    }
+
+                    const float row2Y = startY + itemH + 18.0f;
+                    if (unY >= row2Y && unY <= row2Y + 50.0f) {
+                        if (unX >= -171.0f && unX <= -115.0f) {
+                            std::lock_guard lock(g_stateMutex);
+                            g_state.timer.customMinutes = std::max(1, g_state.timer.customMinutes - 1);
+                            g_layoutDirty = true;
+                            return 0;
+                        } else if (unX >= -65.0f && unX <= -10.0f) {
+                            std::lock_guard lock(g_stateMutex);
+                            g_state.timer.customMinutes = std::min(180, g_state.timer.customMinutes + 1);
+                            g_layoutDirty = true;
+                            return 0;
+                        } else if (unX >= 10.0f && unX <= 171.0f) {
+                            int mins = 5;
+                            {
+                                std::lock_guard lock(g_stateMutex);
+                                mins = g_state.timer.customMinutes;
+                            }
+                            StartTimer(mins * 60);
+                            return 0;
+                        }
+                    }
+                }
+
                 // Intercept clicks in Notification Center tab
                 bool isNotifTab = false;
-                if (mediaActive && (g_idleTab % 4) == 3) {
+                if (mediaActive && (g_idleTab % 6) == 5) {
                     isNotifTab = true;
-                } else if (!mediaActive && (g_idleTab % 3) == 2) {
+                } else if (!mediaActive && (g_idleTab % 5) == 4) {
                     isNotifTab = true;
                 }
 
-                if (isNotifTab && height > 60.0f) {
-                    float totalScale = (GetDpiForWindow(hwnd) / 96.0f) * g_settings.sizeScale;
+                if (isNotifTab && height > 140.0f * totalScale) {
                     float cx = width / 2.0f;
                     float cy = height / 2.0f;
                     
@@ -7155,7 +8018,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                     std::remove_if(g_fallbackNotifications.begin(), g_fallbackNotifications.end(),
                                                    [&item](const NotificationSnapshot& n) {
                                                        return n.app == item.app && n.title == item.title;
-                                                   }),
+                                                    }),
                                     g_fallbackNotifications.end());
                             }
                             g_layoutDirty = true;
@@ -7169,17 +8032,17 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 }
 
                 if (mediaActive) {
-                    if (height > 45.0f && xPos > width - 30.0f) {
+                    if (height > 140.0f * totalScale && xPos > width - 30.0f) {
                         // Clicked on the right edge scroll area in Media
-                        g_idleTab = (g_idleTab + 1) % 4;
+                        g_idleTab = (g_idleTab + 1) % 6;
                         g_layoutDirty = true;
                     } else {
                         OpenRelevantApp();
                     }
                 } else {
-                    if (!kinds.empty() && kinds[0] == IslandKind::Idle && height > 45.0f) {
-                        if (xPos < width / 2.0f) g_idleTab = (g_idleTab - 1 + 3) % 3;
-                        else g_idleTab = (g_idleTab + 1) % 3;
+                    if (!kinds.empty() && kinds[0] == IslandKind::Idle && height > 140.0f * totalScale) {
+                        if (xPos < width / 2.0f) g_idleTab = (g_idleTab - 1 + 5) % 5;
+                        else g_idleTab = (g_idleTab + 1) % 5;
                         g_layoutDirty = true;
                     } else {
                         HandleStatusClickAtPoint(hwnd, lParam);
@@ -7207,7 +8070,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 std::lock_guard lock(g_stateMutex);
                 mediaActive = g_settings.media && g_state.media.available;
             }
-            int tabCount = mediaActive ? 4 : 3;
+            int tabCount = mediaActive ? 5 : 4;
             int delta = GET_WHEEL_DELTA_WPARAM(wParam);
             if (delta > 0) {
                 if (g_idleTab > 0) g_idleTab--;
@@ -7383,7 +8246,18 @@ DWORD WINAPI RenderThreadProc(void*) {
         GetWindowRect(hwnd, &windowRect);
         POINT cursor = {};
         GetCursorPos(&cursor);
-        const bool hover = PtInRect(&windowRect, cursor) != FALSE;
+
+        // Precise animated pill bounds testing to eliminate hover hysteresis & lag
+        const float pillW = std::max(widthSpring.value, 160.0f * g_settings.sizeScale);
+        const float pillH = std::max(heightSpring.value, 40.0f * g_settings.sizeScale);
+        const float winCx = (windowRect.left + windowRect.right) * 0.5f;
+        const float winTop = static_cast<float>(windowRect.top);
+
+        D2D1_RECT_F visualPillRect = D2D1::RectF(winCx - pillW * 0.5f - 6.0f, winTop - 4.0f,
+                                                 winCx + pillW * 0.5f + 6.0f, winTop + pillH + 6.0f);
+
+        const bool hover = (cursor.x >= visualPillRect.left && cursor.x <= visualPillRect.right &&
+                            cursor.y >= visualPillRect.top && cursor.y <= visualPillRect.bottom);
         
         bool needsRender = false;
         
@@ -7436,6 +8310,15 @@ DWORD WINAPI RenderThreadProc(void*) {
                 primary.height = 184.0f * g_settings.sizeScale;
             }
         }
+        if (primary.kind == IslandKind::Timer) {
+            if (isHoverExpanded || pinned) {
+                primary.width = 340.0f * g_settings.sizeScale;
+                primary.height = 116.0f * g_settings.sizeScale;
+            } else {
+                primary.width = 180.0f * g_settings.sizeScale;
+                primary.height = 44.0f * g_settings.sizeScale;
+            }
+        }
 
         float targetWidth = primary.width;
         float targetHeight = primary.height;
@@ -7457,23 +8340,23 @@ DWORD WINAPI RenderThreadProc(void*) {
         dt = Clamp(dt, 0.001f, 0.050f);
 
         const float speed = g_settings.animationSpeed;
-        float widthStiffness = 280.0f;
-        float widthDamping = 24.0f;
+        float widthStiffness = 380.0f;
+        float widthDamping = 26.0f;
         if (targetWidth > widthSpring.value) {
-            widthStiffness = 380.0f;
-            widthDamping = 26.0f;
+            widthStiffness = 450.0f; // Fast, snappy expand
+            widthDamping = 28.0f;
         } else if (targetWidth < widthSpring.value) {
-            widthStiffness = 200.0f;
+            widthStiffness = 420.0f; // Smooth, responsive collapse
             widthDamping = 28.0f;
         }
 
-        float heightStiffness = 280.0f;
-        float heightDamping = 24.0f;
+        float heightStiffness = 380.0f;
+        float heightDamping = 26.0f;
         if (targetHeight > heightSpring.value) {
-            heightStiffness = 380.0f;
-            heightDamping = 26.0f;
+            heightStiffness = 450.0f;
+            heightDamping = 28.0f;
         } else if (targetHeight < heightSpring.value) {
-            heightStiffness = 200.0f;
+            heightStiffness = 420.0f;
             heightDamping = 28.0f;
         }
 
@@ -7538,8 +8421,26 @@ DWORD WINAPI RenderThreadProc(void*) {
 
         // Animated activities that require continuous rendering
         if (primary.kind == IslandKind::Media || primary.kind == IslandKind::BatteryLow ||
-            primary.kind == IslandKind::Clipboard || primary.kind == IslandKind::Notification) {
+            primary.kind == IslandKind::Clipboard || primary.kind == IslandKind::Notification ||
+            primary.kind == IslandKind::Timer) {
             needsRender = true;
+        }
+
+        // Timer expiration check
+        {
+            std::lock_guard lock(g_stateMutex);
+            if (g_state.timer.active && !g_state.timer.paused && now >= g_state.timer.targetTime) {
+                g_state.timer.active = false;
+                MessageBeep(MB_ICONASTERISK);
+                NotificationSnapshot timerNotif;
+                timerNotif.active = true;
+                timerNotif.app = L"Timer";
+                timerNotif.title = L"Timer Finished!";
+                timerNotif.body = L"Your countdown timer has completed.";
+                timerNotif.expiresAt = now + 5.0;
+                g_fallbackNotifications.push_back(timerNotif);
+                g_layoutDirty = true;
+            }
         }
 
         // Privacy dots
