@@ -29,6 +29,7 @@ The Dynamic Island intelligently expands to display context-aware dashboards. Yo
 | **Media Player** | Shows live full-pill background album art, track details, audio-reactive waving scrubber, and playback controls. | ![Media](https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/media.png) |
 | **Calendar** | A sleek, perfectly aligned monthly calendar that highlights the current date. | ![Calendar](https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/calender.png) |
 | **Weather** | Real-time weather stats powered by wttr.in, including wind speed, humidity, and "feels like" temperature. | ![Weather](https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/weather.png) |
+| **Notification Center** | A live notification feed where you can view active alerts. Click a message (e.g. WhatsApp, Telegram) to open/focus it to reply, or click close to dismiss it from Windows. | ![Notifications](https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/notification-center.png) |
 | **Game Overlay** | Real-time FPS, CPU, GPU, and RAM utilization overlays tailored for gamers. | ![Gamebar](https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/gamebar.png) |
 | **Idle View** | A minimal dashboard with your battery status, digital clock, and sleek pagination dots. | ![Idle](https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/idle.png) |
 | **Camera Privacy** | Shows a green dot when an app is actively using your webcam. | ![Camera](https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/camera-detected.png) |
@@ -39,18 +40,19 @@ The Dynamic Island intelligently expands to display context-aware dashboards. Yo
 ## ✨ Core Features
 
 - **Sleek Audio Visualizer & Background Art:** Center-cropped background album art covers the entire pill with a smooth fade, paired with an elegant audio-reactive waving visualizer scrubber that curves only on the played portion and tapers cleanly to the progress knob. Texts and playback controls are rendered in high-contrast white with drop shadows for flawless readability.
+- **Interactive Notification Center:** An integrated live feed of active Windows notifications (like WhatsApp or Telegram). Click anywhere on the notification card to bring the corresponding app's window to the foreground, or click the dedicated reply button to jump straight into replying. Click the dismiss button to permanently clear it from the Windows Action Center.
 - **Hardware Privacy Indicators:** A pulsing orange dot appears when your microphone is active, and a green dot when your camera is in use. Rate-limited polling ensures absolutely no CPU drain.
 - **High-Res Clipboard & Notifications:** Instantly see what you copied or your latest Windows notifications, featuring crisp, high-fidelity 64px app icons extracted directly from system executables.
 - **Dynamic Fluid Animations:** Fully smooth resizing and splitting when multiple events happen at once (e.g., media playing while you copy text or receive a notification).
 - **Customizable Aesthetics:** Switch between sleek OLED Black, Dark Gray, Midnight Blue, and Deep Purple themes from the right-click menu, or use the settings to dial in your exact hex colors.
-- **Ctrl+Hover Click-Through:** Hold `Ctrl` and hover over the island when it's showing an active event (media, notifications, etc.) to make it transparent and click-through, letting you interact with windows underneath without dismissing the island.
+- **Ctrl+Hover Click-Through:** Hold `Ctrl` and hover over the island in any state (idle, media, notifications, etc.) to make it transparent and click-through, letting you interact with windows underneath without dismissing the island.
 
 ---
 
 ## ⚙️ Usage & Settings
 
-- **Hover & Scroll:** Hover over the island to seamlessly expand it. Use your mouse scroll wheel to swipe between the Media, Calendar, and Weather tabs.
-- **Ctrl+Hover:** Hold `Ctrl` while hovering over an active island to make it see-through and click-through. Release `Ctrl` or move your mouse away to restore it.
+- **Hover & Scroll:** Hover over the island to seamlessly expand it. Use your mouse scroll wheel to swipe between the Media, Calendar, Weather, and Notification Center tabs.
+- **Ctrl+Hover:** Hold `Ctrl` while hovering over the island in any state (idle or active) to make it see-through and click-through. Release `Ctrl` or move your mouse away to restore it.
 - **Right-Click Menu:** Right-click the island to access Theme presets, Transparency settings, and to pin the island open.
 - **Windhawk Settings:** Visit the Mod Settings tab to change the island's Position, Size Scale, Animation Speed, and toggle specific modules. You can also perfectly align the island using the new `Offset X` and `Offset Y` settings, and even select exactly which monitor the island should appear on (including a brand new "Follow Mouse" mode!).
 - **Notifications:** To use the notification module, you need to add `explorer.exe` to the process inclusion list in the Advanced tab of the mod settings and restart the mod.
@@ -60,7 +62,7 @@ The Dynamic Island intelligently expands to display context-aware dashboards. Yo
 ## 📝 Feedback & Credits
 
 ### Feedback / Support / Bug Reports
-- Please use [Windhawk Mods Issues](https://github.com/ramensoftware/windhawk-mods/issues) or [dynamic-island-for-windows issues](https://github.com/devcode90/dynamic-island-for-windows/issues) to report bugs, request features, or share feedback.  
+- Please use [Windhawk Mods Issues](https://github.com/ramensoftware/windhawk-mods/issues) or [dynamic-island-for-windows issues](https://github.com/nabil24024004/dynamic-island-for-windows/issues) to report bugs, request features, or share feedback.  
 - Clear descriptions, screenshots, or steps to reproduce help improve fixes and updates.  
 - Suggestions for UI/UX or new integrations are always welcome.
 
@@ -382,6 +384,7 @@ struct ProgressSnapshot {
 
 struct NotificationSnapshot {
     bool active = false;
+    uint32_t winrtId = 0;
     std::wstring app;
     std::wstring title;
     std::wstring body;
@@ -455,6 +458,7 @@ struct SharedState {
     MediaSnapshot media;
     ClipboardSnapshot clipboard;
     NotificationSnapshot notification;
+    std::vector<NotificationSnapshot> liveNotifications;
     VolumeSnapshot volume;
     CapsLockSnapshot capsLock;
     DeviceSnapshot device;
@@ -490,6 +494,8 @@ struct SpringValue {
     }
 };
 
+void FocusAppWindow(const std::wstring& appName);
+
 Settings g_settings;
 std::mutex g_stateMutex;
 SharedState g_state;
@@ -508,6 +514,8 @@ std::atomic<int> g_idleTab = 0;
 std::atomic<bool> g_layoutDirty = true;
 std::atomic<bool> g_clickExpanded = false;
 std::atomic<int> g_pressedMediaButton = -1;
+std::atomic<uint32_t> g_notifIdToRemove = 0;
+std::wstring g_appToFocus;
 
 FILETIME g_prevIdleTime = {};
 FILETIME g_prevKernelTime = {};
@@ -1611,33 +1619,56 @@ DWORD WINAPI NotificationThreadProc(void*) {
             return 0;
         }
 
+        std::unordered_map<std::wstring, BitmapPixels> logoCache;
+
         while (WaitForSingleObject(g_stopEvent, 0) == WAIT_TIMEOUT) {
             try {
+                // 1. Process programmatic dismissals
+                uint32_t toRemove = g_notifIdToRemove.exchange(0);
+                if (toRemove != 0) {
+                    try {
+                        listener.RemoveNotification(toRemove);
+                    } catch (...) {}
+                }
+
+                // 2. Fetch all active notifications
                 auto notifications = listener.GetNotificationsAsync(NotificationKinds::Toast).get();
+                std::vector<NotificationSnapshot> currentNotifications;
+                currentNotifications.reserve(notifications.Size());
+
                 for (uint32_t i = 0; i < notifications.Size(); ++i) {
                     auto userNotification = notifications.GetAt(i);
                     const uint32_t id = userNotification.Id();
-                    if (id <= lastSeenId) {
-                        continue;
-                    }
 
-                    NotificationSnapshot snapshot;
-                    snapshot.active = true;
-                    snapshot.expiresAt = NowSeconds() + 4.0;
+                    NotificationSnapshot item;
+                    item.winrtId = id;
+                    item.active = true;
+                    item.expiresAt = NowSeconds() + 4.0;
+                    
                     auto appInfo = userNotification.AppInfo();
                     auto displayInfo = appInfo.DisplayInfo();
-                    snapshot.app = displayInfo.DisplayName().c_str();
-                    try {
-                        auto logo = displayInfo.GetLogo({32.0f, 32.0f});
-                        std::vector<uint8_t> logoBytes = ReadWinRtStreamBytes(logo);
-                        if (!logoBytes.empty()) {
-                            DecodeImageBytesToPixels(logoBytes, &snapshot.icon);
+                    item.app = displayInfo.DisplayName().c_str();
+                    
+                    if (!item.app.empty()) {
+                        auto it = logoCache.find(item.app);
+                        if (it != logoCache.end()) {
+                            item.icon = it->second;
+                        } else {
+                            try {
+                                auto logo = displayInfo.GetLogo({32.0f, 32.0f});
+                                std::vector<uint8_t> logoBytes = ReadWinRtStreamBytes(logo);
+                                if (!logoBytes.empty()) {
+                                    DecodeImageBytesToPixels(logoBytes, &item.icon);
+                                    logoCache[item.app] = item.icon;
+                                }
+                            } catch (...) {}
+                            if (item.icon.bgra.empty()) {
+                                item.icon = FindAppIconByName(item.app, 64);
+                                if (!item.icon.bgra.empty()) {
+                                    logoCache[item.app] = item.icon;
+                                }
+                            }
                         }
-                    } catch (...) {
-                    }
-
-                    if (snapshot.icon.bgra.empty() && !snapshot.app.empty()) {
-                        snapshot.icon = FindAppIconByName(snapshot.app, 64);
                     }
 
                     auto notification = userNotification.Notification();
@@ -1645,31 +1676,53 @@ DWORD WINAPI NotificationThreadProc(void*) {
                     if (binding) {
                         auto textElements = binding.GetTextElements();
                         if (textElements.Size() > 0) {
-                            snapshot.title = textElements.GetAt(0).Text().c_str();
+                            item.title = textElements.GetAt(0).Text().c_str();
                         }
                         if (textElements.Size() > 1) {
-                            snapshot.body = textElements.GetAt(1).Text().c_str();
+                            item.body = textElements.GetAt(1).Text().c_str();
                         }
                     }
 
-                    if (snapshot.title.empty()) {
-                        snapshot.title = snapshot.app.empty() ? L"New notification" : snapshot.app;
-                    }
-                    if (!snapshot.body.empty()) {
-                        snapshot.title += L" - " + snapshot.body;
-                    }
-                    if (snapshot.title.size() > 120) {
-                        snapshot.title.resize(120);
-                        snapshot.title += L"...";
+                    if (item.title.empty()) {
+                        item.title = item.app.empty() ? L"New notification" : item.app;
                     }
 
-                    {
-                        std::lock_guard lock(g_stateMutex);
-                        g_state.notification = std::move(snapshot);
+                    // Check for new notifications to trigger a popup nudge
+                    if (id > lastSeenId) {
+                        NotificationSnapshot snapshot;
+                        snapshot.active = true;
+                        snapshot.winrtId = id;
+                        snapshot.expiresAt = NowSeconds() + 4.0;
+                        snapshot.app = item.app;
+                        snapshot.title = item.title;
+                        snapshot.body = item.body;
+                        snapshot.icon = item.icon;
+
+                        if (!snapshot.body.empty()) {
+                            snapshot.title += L" - " + snapshot.body;
+                        }
+                        if (snapshot.title.size() > 120) {
+                            snapshot.title.resize(120);
+                            snapshot.title += L"...";
+                        }
+
+                        {
+                            std::lock_guard lock(g_stateMutex);
+                            g_state.notification = std::move(snapshot);
+                        }
+                        TriggerNudge();
+                        lastSeenId = id;
                     }
-                    TriggerNudge();
-                    lastSeenId = id;
+
+                    currentNotifications.push_back(std::move(item));
                 }
+
+                // Update the global live notifications list
+                {
+                    std::lock_guard lock(g_stateMutex);
+                    g_state.liveNotifications = std::move(currentNotifications);
+                }
+
             } catch (const winrt::hresult_error& ex) {
                 const HRESULT hr = ex.to_abi();
                 Wh_Log(L"NotificationThreadProc loop WinRT error: %s (0x%08X)", ex.message().c_str(), hr);
@@ -3108,6 +3161,8 @@ class Renderer {
     void Shutdown() {
         artBitmap_.Reset();
         notificationIconBitmap_.Reset();
+        notifListIconBitmap1_.Reset();
+        notifListIconBitmap2_.Reset();
         mediaSourceIconBitmap_.Reset();
         clipboardIconBitmap_.Reset();
         accentBrush_.Reset();
@@ -3695,6 +3750,132 @@ class Renderer {
                            rightLine5, mutedBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
     }
 
+    void DrawNotificationDashboard(const SharedState& state, D2D1_RECT_F rect, const Settings& settings, double now, float scale) {
+        std::vector<NotificationSnapshot> list;
+        {
+            std::lock_guard lock(g_stateMutex);
+            list = state.liveNotifications;
+            if (list.empty() && state.notification.active && now < state.notification.expiresAt) {
+                list.push_back(state.notification);
+            }
+        }
+
+        if (list.empty()) {
+            ComPtr<ID2D1SolidColorBrush> iconBrush;
+            target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.25f * settingsOpacity_), &iconBrush);
+            
+            const wchar_t* bellChar = L"\uEA8F";
+            D2D1_RECT_F bellRect = D2D1::RectF(rect.left, rect.top + 32.0f * scale, rect.right, rect.top + 72.0f * scale);
+            
+            ComPtr<IDWriteTextFormat> hugeBellFormat;
+            dwriteFactory_->CreateTextFormat(L"Segoe Fluent Icons", nullptr,
+                                             DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+                                             DWRITE_FONT_STRETCH_NORMAL,
+                                             36.0f * scale, L"", &hugeBellFormat);
+            if (hugeBellFormat) {
+                hugeBellFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                target_->DrawTextW(bellChar, 1, hugeBellFormat.Get(), bellRect, iconBrush.Get());
+            }
+
+            D2D1_RECT_F noNotifRect = D2D1::RectF(rect.left, rect.top + 80.0f * scale, rect.right, rect.bottom);
+            if (mediaArtistFormat_) {
+                mediaArtistFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                target_->DrawTextW(L"No Active Notifications", 23, mediaArtistFormat_.Get(), noNotifRect, iconBrush.Get());
+                mediaArtistFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            }
+            return;
+        }
+
+        const size_t count = std::min<size_t>(list.size(), 2);
+        for (size_t i = 0; i < count; ++i) {
+            const auto& item = list[i];
+            const float itemTop = rect.top + 12.0f * scale + i * 58.0f * scale;
+            const float itemBottom = itemTop + 48.0f * scale;
+            const float itemLeft = rect.left + 15.0f * scale;
+            
+            D2D1_RECT_F badgeRect = D2D1::RectF(itemLeft, itemTop + 6.0f * scale, itemLeft + 36.0f * scale, itemTop + 42.0f * scale);
+            const float br = 8.0f * scale;
+
+            if (!item.icon.bgra.empty()) {
+                if (i == 0) {
+                    DrawRoundedBitmapPixels(item.icon, badgeRect, br, notifListIconBitmap1_, notifListIconGen1_, 1.0f);
+                } else {
+                    DrawRoundedBitmapPixels(item.icon, badgeRect, br, notifListIconBitmap2_, notifListIconGen2_, 1.0f);
+                }
+            } else {
+                ComPtr<ID2D1SolidColorBrush> fallbackBg;
+                target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.12f), &fallbackBg);
+                target_->FillRoundedRectangle(D2D1::RoundedRect(badgeRect, br, br), fallbackBg.Get());
+                
+                if (!item.app.empty()) {
+                    wchar_t letter[2] = {item.app[0], L'\0'};
+                    ComPtr<ID2D1SolidColorBrush> fallbackFg;
+                    target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.55f), &fallbackFg);
+                    if (mediaArtistFormat_) {
+                        mediaArtistFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                        target_->DrawTextW(letter, 1, mediaArtistFormat_.Get(), badgeRect, fallbackFg.Get());
+                        mediaArtistFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+                    }
+                }
+            }
+
+            const float textLeft = itemLeft + 48.0f * scale;
+            const float textRight = rect.right - 90.0f * scale;
+            
+            D2D1_RECT_F appTitleRect = D2D1::RectF(textLeft, itemTop + 4.0f * scale, textRight, itemTop + 24.0f * scale);
+            D2D1_RECT_F bodyRect = D2D1::RectF(textLeft, itemTop + 24.0f * scale, textRight, itemTop + 44.0f * scale);
+
+            std::wstring headerText = item.app;
+            if (!item.title.empty() && item.title != item.app) {
+                headerText += L" \u2022 " + item.title;
+            }
+            
+            ComPtr<ID2D1SolidColorBrush> textBrush;
+            target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.95f), &textBrush);
+            target_->DrawTextW(headerText.c_str(), static_cast<UINT32>(headerText.size()), mediaArtistFormat_.Get(), appTitleRect, textBrush.Get());
+
+            textBrush->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.60f));
+            std::wstring bodyText = item.body.empty() ? L"" : item.body;
+            if (bodyText.size() > 48) {
+                bodyText.resize(45);
+                bodyText += L"...";
+            }
+            target_->DrawTextW(bodyText.c_str(), static_cast<UINT32>(bodyText.size()), smallTextFormat_.Get(), bodyRect, textBrush.Get());
+
+            const float btnY = itemTop + 12.0f * scale;
+            const float btnSize = 24.0f * scale;
+            
+            D2D1_RECT_F replyRect = D2D1::RectF(rect.right - 72.0f * scale, btnY, rect.right - 48.0f * scale, btnY + btnSize);
+            ComPtr<ID2D1SolidColorBrush> btnBg;
+            target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.08f), &btnBg);
+            target_->FillRoundedRectangle(D2D1::RoundedRect(replyRect, 12.0f * scale, 12.0f * scale), btnBg.Get());
+
+            ComPtr<ID2D1SolidColorBrush> btnIconBrush;
+            target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.85f), &btnIconBrush);
+            const wchar_t* chatIcon = L"\uE90A";
+            
+            D2D1_RECT_F replyIconRect = D2D1::RectF(replyRect.left, replyRect.top + 3.0f * scale, replyRect.right, replyRect.bottom);
+            if (iconFormat_) {
+                iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                target_->DrawTextW(chatIcon, 1, iconFormat_.Get(), replyIconRect, btnIconBrush.Get());
+                iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            }
+
+            D2D1_RECT_F dismissRect = D2D1::RectF(rect.right - 38.0f * scale, btnY, rect.right - 14.0f * scale, btnY + btnSize);
+            btnBg->SetColor(D2D1::ColorF(1.0f, 0.2f, 0.2f, 0.12f));
+            target_->FillRoundedRectangle(D2D1::RoundedRect(dismissRect, 12.0f * scale, 12.0f * scale), btnBg.Get());
+
+            btnIconBrush->SetColor(D2D1::ColorF(1.0f, 0.35f, 0.35f, 0.85f));
+            const wchar_t* xIcon = L"\uE711";
+            D2D1_RECT_F dismissIconRect = D2D1::RectF(dismissRect.left, dismissRect.top + 3.0f * scale, dismissRect.right, dismissRect.bottom);
+            if (iconFormat_) {
+                iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                target_->DrawTextW(xIcon, 1, iconFormat_.Get(), dismissIconRect, btnIconBrush.Get());
+                iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            }
+        }
+    }
+
     void DrawIdleDashboard(const SharedState& state, D2D1_RECT_F rect, const Settings& settings,
                            double now) {
         if (settings.gameOverlay || Wh_GetIntValue(L"GameOverlayPinned", 0) != 0) {
@@ -3751,11 +3932,12 @@ class Renderer {
         }
 
         // Expanded Mode
-        int tab = g_idleTab % 2;
-        if (tab < 0) tab += 2;
+        int tab = g_idleTab % 3;
+        if (tab < 0) tab += 3;
 
         if (tab == 0) DrawCalendarDashboard(state, rect, settings, now, scale, local);
-        else DrawWeatherDashboard(state, rect, settings, now, scale, hasWeather, wIcon, wText);
+        else if (tab == 1) DrawWeatherDashboard(state, rect, settings, now, scale, hasWeather, wIcon, wText);
+        else DrawNotificationDashboard(state, rect, settings, now, scale);
 
         // Pagination dots (Vertical on the right edge)
         float shiftX = 0.0f;
@@ -3773,8 +3955,9 @@ class Renderer {
         target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.85f * settingsOpacity_), &activeDot);
         target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.25f * settingsOpacity_), &inactiveDot);
 
-        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY - spacing * 0.5f), r, r), tab == 0 ? activeDot.Get() : inactiveDot.Get());
-        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY + spacing * 0.5f), r, r), tab == 1 ? activeDot.Get() : inactiveDot.Get());
+        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY - spacing), r, r), tab == 0 ? activeDot.Get() : inactiveDot.Get());
+        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY), r, r), tab == 1 ? activeDot.Get() : inactiveDot.Get());
+        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY + spacing), r, r), tab == 2 ? activeDot.Get() : inactiveDot.Get());
 
         target_->PopAxisAlignedClip();
     }
@@ -4285,8 +4468,8 @@ class Renderer {
         if (expandedAlpha > 0.01f && mask && layer) {
             target_->PushLayer(D2D1::LayerParameters(rect, mask.Get(), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1::IdentityMatrix(), expandedAlpha, nullptr, D2D1_LAYER_OPTIONS_NONE), layer.Get());
             
-            int tab = g_idleTab % 3;
-            if (tab < 0) tab += 3;
+            int tab = g_idleTab % 4;
+            if (tab < 0) tab += 4;
 
             if (tab == 0) {
                 // ── Background album art (covers the entire pill, fades to dark on left) ──
@@ -4554,6 +4737,8 @@ class Renderer {
                     GetWeatherIconAndText(state.weather.weatherCode, wIcon, wText);
                 }
                 DrawWeatherDashboard(state, rect, g_settings, now, 1.0f, hasWeather, wIcon, wText);
+            } else if (tab == 3) {
+                DrawNotificationDashboard(state, rect, g_settings, now, 1.0f);
             }
 
             // Pagination dots (Vertical on the right edge)
@@ -4573,9 +4758,10 @@ class Renderer {
             target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.85f * settingsOpacity_), &activeDot);
             target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.25f * settingsOpacity_), &inactiveDot);
 
-            target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY - spacing), r, r), tab == 0 ? activeDot.Get() : inactiveDot.Get());
-            target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY), r, r), tab == 1 ? activeDot.Get() : inactiveDot.Get());
-            target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY + spacing), r, r), tab == 2 ? activeDot.Get() : inactiveDot.Get());
+            target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY - spacing * 1.5f), r, r), tab == 0 ? activeDot.Get() : inactiveDot.Get());
+            target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY - spacing * 0.5f), r, r), tab == 1 ? activeDot.Get() : inactiveDot.Get());
+            target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY + spacing * 0.5f), r, r), tab == 2 ? activeDot.Get() : inactiveDot.Get());
+            target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(dotX, dotY + spacing * 1.5f), r, r), tab == 3 ? activeDot.Get() : inactiveDot.Get());
 
             target_->PopLayer();
         }
@@ -5466,10 +5652,14 @@ class Renderer {
     ComPtr<ID2D1SolidColorBrush> shadowBrush_;
     ComPtr<ID2D1Bitmap> artBitmap_;
     ComPtr<ID2D1Bitmap> notificationIconBitmap_;
+    ComPtr<ID2D1Bitmap> notifListIconBitmap1_;
+    ComPtr<ID2D1Bitmap> notifListIconBitmap2_;
     ComPtr<ID2D1Bitmap> mediaSourceIconBitmap_;
     ComPtr<ID2D1Bitmap> clipboardIconBitmap_;
     uint64_t artGeneration_ = 0;
     uint64_t notificationIconGeneration_ = 0;
+    uint64_t notifListIconGen1_ = 0;
+    uint64_t notifListIconGen2_ = 0;
     uint64_t mediaSourceIconGeneration_ = 0;
     uint64_t clipboardIconGeneration_ = 0;
     float settingsOpacity_ = 0.96f;
@@ -5596,6 +5786,84 @@ DWORD WINAPI KeyboardThreadProc(void*) {
     return 0;
 }
 
+struct FocusEnumData {
+    std::wstring target;
+    HWND hwnd = nullptr;
+};
+
+BOOL CALLBACK FocusEnumProc(HWND hwnd, LPARAM lParam) {
+    if (!IsWindowVisible(hwnd)) return TRUE;
+    
+    LONG style = GetWindowLong(hwnd, GWL_STYLE);
+    if (style & WS_CHILD) return TRUE;
+
+    wchar_t title[256];
+    GetWindowTextW(hwnd, title, 256);
+    std::wstring wTitle(title);
+    if (wTitle.empty()) return TRUE;
+
+    auto* d = reinterpret_cast<FocusEnumData*>(lParam);
+    
+    auto to_lower = [](std::wstring s) {
+        std::wstring res;
+        res.reserve(s.size());
+        for (auto c : s) {
+            res += static_cast<wchar_t>(tolower(static_cast<int>(c)));
+        }
+        return res;
+    };
+
+    std::wstring lowerTitle = to_lower(wTitle);
+    std::wstring lowerTarget = to_lower(d->target);
+
+    if (lowerTitle.find(lowerTarget) != std::wstring::npos) {
+        d->hwnd = hwnd;
+        return FALSE;
+    }
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != 0) {
+        HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (proc) {
+            wchar_t path[MAX_PATH];
+            DWORD size = MAX_PATH;
+            if (QueryFullProcessImageNameW(proc, 0, path, &size)) {
+                std::wstring wPath(path);
+                size_t slash = wPath.find_last_of(L"\\/");
+                std::wstring exeName = (slash == std::wstring::npos) ? wPath : wPath.substr(slash + 1);
+                std::wstring lowerExe = to_lower(exeName);
+                if (lowerExe.find(lowerTarget) != std::wstring::npos) {
+                    d->hwnd = hwnd;
+                    CloseHandle(proc);
+                    return FALSE;
+                }
+            }
+            CloseHandle(proc);
+        }
+    }
+
+    return TRUE;
+}
+
+void FocusAppWindow(const std::wstring& appName) {
+    if (appName.empty()) return;
+
+    FocusEnumData data;
+    data.target = appName;
+
+    EnumWindows(FocusEnumProc, reinterpret_cast<LPARAM>(&data));
+
+    if (data.hwnd) {
+        if (IsIconic(data.hwnd)) {
+            ShowWindow(data.hwnd, SW_RESTORE);
+        } else {
+            ShowWindow(data.hwnd, SW_SHOW);
+        }
+        SetForegroundWindow(data.hwnd);
+    }
+}
+
 LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE:
@@ -5686,7 +5954,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 const float height = static_cast<float>(clientRect.bottom - clientRect.top);
                 const float width = static_cast<float>(clientRect.right - clientRect.left);
 
-                if (mediaActive && height > 60.0f && (g_idleTab % 3) == 0) {
+                if (mediaActive && height > 60.0f && (g_idleTab % 4) == 0) {
                     float totalScale = (GetDpiForWindow(hwnd) / 96.0f) * g_settings.sizeScale;
                     float cx = width / 2.0f;
                     float cy = height / 2.0f;
@@ -5743,7 +6011,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 const float height = static_cast<float>(clientRect.bottom - clientRect.top);
                 const float width = static_cast<float>(clientRect.right - clientRect.left);
 
-                if (mediaActive && height > 60.0f && (g_idleTab % 3) == 0) {
+                if (mediaActive && height > 60.0f && (g_idleTab % 4) == 0) {
                     float totalScale = (GetDpiForWindow(hwnd) / 96.0f) * g_settings.sizeScale;
                     float cx = width / 2.0f;
                     float cy = height / 2.0f;
@@ -5793,18 +6061,76 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     }
                 }
 
+                // Intercept clicks in Notification Center tab
+                bool isNotifTab = false;
+                if (mediaActive && (g_idleTab % 4) == 3) {
+                    isNotifTab = true;
+                } else if (!mediaActive && (g_idleTab % 3) == 2) {
+                    isNotifTab = true;
+                }
+
+                if (isNotifTab && height > 60.0f) {
+                    float totalScale = (GetDpiForWindow(hwnd) / 96.0f) * g_settings.sizeScale;
+                    float cx = width / 2.0f;
+                    float cy = height / 2.0f;
+                    
+                    float unX = (xPos - cx) / totalScale;
+                    float unY = (yPos - cy) / totalScale;
+                    float relativeX = unX + 260.0f;
+                    float relativeY = unY + 70.0f;
+
+                    std::vector<NotificationSnapshot> list;
+                    {
+                        std::lock_guard lock(g_stateMutex);
+                        list = g_state.liveNotifications;
+                        if (list.empty() && g_state.notification.active && NowSeconds() < g_state.notification.expiresAt) {
+                            list.push_back(g_state.notification);
+                        }
+                    }
+
+                    int clickedRow = -1;
+                    if (relativeY >= 12.0f && relativeY <= 60.0f) {
+                        clickedRow = 0;
+                    } else if (relativeY >= 70.0f && relativeY <= 118.0f) {
+                        clickedRow = 1;
+                    }
+
+                    if (clickedRow != -1 && clickedRow < static_cast<int>(list.size())) {
+                        const auto& item = list[clickedRow];
+                        
+                        if (relativeX >= 448.0f && relativeX <= 472.0f) {
+                            FocusAppWindow(item.app);
+                            return 0;
+                        }
+                        else if (relativeX >= 482.0f && relativeX <= 506.0f) {
+                            if (item.winrtId != 0) {
+                                g_notifIdToRemove.store(item.winrtId);
+                            } else {
+                                std::lock_guard lock(g_stateMutex);
+                                g_state.notification.active = false;
+                            }
+                            g_layoutDirty = true;
+                            return 0;
+                        }
+                        else if (relativeX >= 15.0f && relativeX <= 440.0f) {
+                            FocusAppWindow(item.app);
+                            return 0;
+                        }
+                    }
+                }
+
                 if (mediaActive) {
                     if (height > 45.0f && xPos > width - 30.0f) {
                         // Clicked on the right edge scroll area in Media
-                        g_idleTab = (g_idleTab + 1) % 3;
+                        g_idleTab = (g_idleTab + 1) % 4;
                         g_layoutDirty = true;
                     } else {
                         OpenRelevantApp();
                     }
                 } else {
                     if (!kinds.empty() && kinds[0] == IslandKind::Idle && height > 45.0f) {
-                        if (xPos < width / 2.0f) g_idleTab = (g_idleTab - 1 + 2) % 2;
-                        else g_idleTab = (g_idleTab + 1) % 2;
+                        if (xPos < width / 2.0f) g_idleTab = (g_idleTab - 1 + 3) % 3;
+                        else g_idleTab = (g_idleTab + 1) % 3;
                         g_layoutDirty = true;
                     } else {
                         HandleStatusClickAtPoint(hwnd, lParam);
@@ -5832,7 +6158,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 std::lock_guard lock(g_stateMutex);
                 mediaActive = g_settings.media && g_state.media.available;
             }
-            int tabCount = mediaActive ? 3 : 2;
+            int tabCount = mediaActive ? 4 : 3;
             int delta = GET_WHEEL_DELTA_WPARAM(wParam);
             if (delta > 0) {
                 if (g_idleTab > 0) g_idleTab--;
@@ -6113,7 +6439,7 @@ DWORD WINAPI RenderThreadProc(void*) {
         // transparent and click-through so clicks pass to windows underneath.
         // Releasing Ctrl or moving the mouse away restores normal behavior.
         const bool ctrlHeld = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-        const bool ctrlHoverCT = hover && ctrlHeld && primary.kind != IslandKind::Idle;
+        const bool ctrlHoverCT = hover && ctrlHeld;
         SetClickThrough(hwnd, (primary.kind == IslandKind::Idle && !hover && !pinned) || ctrlHoverCT);
 
         // Check if animating structurally

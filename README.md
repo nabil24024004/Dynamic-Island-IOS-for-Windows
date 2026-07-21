@@ -12,9 +12,9 @@ A smooth, interactive overlay for your desktop, inspired by Apple's Dynamic Isla
 
 ### Dashboards
 
-| Media Player | Calendar | Weather | Game Overlay | Idle View |
-| :---: | :---: | :---: | :---: | :---: |
-| <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/media.png" width="200" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/calender.png" width="200" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/weather.png" width="200" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/gamebar.png" width="200" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/idle.png" width="200" /> |
+| Media Player | Calendar | Weather | Notification Center | Game Overlay | Idle View |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+| <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/media.png" width="160" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/calender.png" width="160" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/weather.png" width="160" /> | <img src="https://raw.githubusercontent.com/nabil24024004/Dynamic-Island-for-Windows/main/previews/notification-center.png" width="160" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/gamebar.png" width="160" /> | <img src="https://raw.githubusercontent.com/devcode90/Dynamic-Island-for-Windows/main/previews/idle.png" width="160" /> |
 
 ### Privacy Indicators
 
@@ -28,7 +28,8 @@ A smooth, interactive overlay for your desktop, inspired by Apple's Dynamic Isla
 
 - 🟢 **Privacy Dots:** See an orange dot when your mic is on and a green dot for your camera.
 - 🎵 **Media Player:** Full-pill centered background album art with a smooth readability gradient, an elegant audio-reactive waving scrubber waveform (flat-bottomed waving track tapering cleanly to the knob), larger high-contrast white text, and playback controls with soft drop shadows.
-- 📅 **Dashboards:** Scroll your mouse wheel to easily switch between Media, Calendar, and live Weather (via wttr.in).
+- 📅 **Dashboards:** Swipe or scroll to switch between Media, Calendar, live Weather, and the live Notification Center.
+- 🔔 **Notification Center:** View active Windows notifications live. Click a message (like WhatsApp or Telegram) to focus/bring that app to the foreground so you can reply, or click the X button to dismiss it from Windows.
 - 🔒 **Key Alerts:** Get quick visual popups when you hit Caps Lock or Num Lock.
 - 🔋 **Battery & Power:** Fluid animations when you plug in, unplug, or hit low battery.
 - 🔌 **Device Status:** Alerts when you plug in a USB drive or connect a Bluetooth device.
