@@ -30,6 +30,7 @@ A smooth, interactive overlay for your desktop, inspired by Apple's Dynamic Isla
 - 🎵 **Media Player:** Full-pill centered background album art with a smooth readability gradient, an elegant audio-reactive waving scrubber waveform (flat-bottomed waving track tapering cleanly to the knob), larger high-contrast white text, and playback controls with soft drop shadows.
 - 📅 **Dashboards:** Swipe or scroll to switch between Media, Calendar, live Weather, and the live Notification Center.
 - 🔔 **Notification Center:** View active Windows notifications live. Click a message (like WhatsApp or Telegram) to focus/bring that app to the foreground so you can reply, or click the X button to dismiss it from Windows.
+- 📞 **WhatsApp Call Banner:** See incoming WhatsApp calls instantly on the island, featuring the contact name, call type, and circular Accept (Receive) and Decline (Reject) buttons.
 - 🔒 **Key Alerts:** Get quick visual popups when you hit Caps Lock or Num Lock.
 - 🔋 **Battery & Power:** Fluid animations when you plug in, unplug, or hit low battery.
 - 🔌 **Device Status:** Alerts when you plug in a USB drive or connect a Bluetooth device.

@@ -41,6 +41,7 @@ The Dynamic Island intelligently expands to display context-aware dashboards. Yo
 
 - **Sleek Audio Visualizer & Background Art:** Center-cropped background album art covers the entire pill with a smooth fade, paired with an elegant audio-reactive waving visualizer scrubber that curves only on the played portion and tapers cleanly to the progress knob. Texts and playback controls are rendered in high-contrast white with drop shadows for flawless readability.
 - **Interactive Notification Center:** An integrated live feed of active Windows notifications (like WhatsApp or Telegram). Click anywhere on the notification card to bring the corresponding app's window to the foreground, or click the dedicated reply button to jump straight into replying. Click the dismiss button to permanently clear it from the Windows Action Center.
+- **WhatsApp Call Banner:** Prominent live display of incoming WhatsApp voice and video calls featuring the contact name, call type, and circular Accept (Receive) and Decline (Reject) buttons for quick interactions.
 - **Hardware Privacy Indicators:** A pulsing orange dot appears when your microphone is active, and a green dot when your camera is in use. Rate-limited polling ensures absolutely no CPU drain.
 - **High-Res Clipboard & Notifications:** Instantly see what you copied or your latest Windows notifications, featuring crisp, high-fidelity 64px app icons extracted directly from system executables.
 - **Dynamic Fluid Animations:** Fully smooth resizing and splitting when multiple events happen at once (e.g., media playing while you copy text or receive a notification).
@@ -213,6 +214,7 @@ The Dynamic Island intelligently expands to display context-aware dashboards. Yo
 #include <unknwn.h>
 #include <dwmapi.h>
 #include <shellapi.h>
+#include <shobjidl.h>
 #include <setupapi.h>
 #include <dbt.h>
 #include <d2d1.h>
@@ -287,6 +289,7 @@ enum class IslandKind {
     CapsLock,
     Device,
     Split,
+    Call,
 };
 
 enum class Position {
@@ -385,11 +388,24 @@ struct ProgressSnapshot {
 struct NotificationSnapshot {
     bool active = false;
     uint32_t winrtId = 0;
+    HWND hwnd = nullptr;
     std::wstring app;
     std::wstring title;
     std::wstring body;
     BitmapPixels icon;
     double expiresAt = 0.0;
+};
+
+struct CallSnapshot {
+    bool active = false;
+    uint32_t winrtId = 0;
+    HWND hwnd = nullptr;
+    std::wstring callerName;
+    std::wstring callType;
+    BitmapPixels icon;
+    double expiresAt = 0.0;
+    bool isIncoming = true;
+    double callStartedAt = 0.0;
 };
 
 struct VolumeSnapshot {
@@ -459,6 +475,7 @@ struct SharedState {
     ClipboardSnapshot clipboard;
     NotificationSnapshot notification;
     std::vector<NotificationSnapshot> liveNotifications;
+    CallSnapshot incomingCall;
     VolumeSnapshot volume;
     CapsLockSnapshot capsLock;
     DeviceSnapshot device;
@@ -495,6 +512,35 @@ struct SpringValue {
 };
 
 void FocusAppWindow(const std::wstring& appName);
+
+struct CallEnumData {
+    bool found = false;
+    HWND hwnd = nullptr;
+    std::wstring callerName;
+    std::wstring callType;
+    bool isIncoming = true;
+};
+BOOL CALLBACK CallEnumProc(HWND hwnd, LPARAM lParam);
+
+// UIA Helpers for WhatsApp Call info extraction and button action invocation
+void ExtractWhatsAppCallInfoUIA(HWND hwnd, std::wstring& callerName, std::wstring& callType, bool& isIncoming);
+bool TriggerWhatsAppCallActionUIA(HWND hwnd, bool accept);
+
+// Active notification scanning: Windows 11 often reuses XAML containers for toast
+// notifications, so HSHELL_WINDOWCREATED may not fire. These functions actively
+// poll for visible toast windows and extract their content.
+struct ToastScanData {
+    std::vector<HWND> toastWindows;
+};
+BOOL CALLBACK ToastScanEnumProc(HWND hwnd, LPARAM lParam);
+void ScanForActiveToastNotifications();
+struct ProcessedToast {
+    HWND hwnd;
+    std::wstring lastTitle;
+};
+static std::vector<ProcessedToast> g_processedToasts;
+
+std::vector<NotificationSnapshot> g_fallbackNotifications;
 
 Settings g_settings;
 std::mutex g_stateMutex;
@@ -537,6 +583,43 @@ double NowSeconds() {
     using clock = std::chrono::steady_clock;
     static const auto start = clock::now();
     return std::chrono::duration<double>(clock::now() - start).count();
+}
+
+void AddFallbackNotification(const NotificationSnapshot& item) {
+    std::lock_guard lock(g_stateMutex);
+    for (auto& old : g_fallbackNotifications) {
+        if ((item.hwnd != nullptr && old.hwnd == item.hwnd) || (old.app == item.app && old.title == item.title)) {
+            old.expiresAt = item.expiresAt;
+            if (!item.app.empty() && item.app != L"Notification") old.app = item.app;
+            if (!item.title.empty()) old.title = item.title;
+            if (!item.body.empty()) old.body = item.body;
+            if (!item.icon.bgra.empty()) old.icon = item.icon;
+            return;
+        }
+    }
+    g_fallbackNotifications.push_back(item);
+    if (g_fallbackNotifications.size() > 5) {
+        g_fallbackNotifications.erase(g_fallbackNotifications.begin());
+    }
+}
+
+void RenewFallbackNotification(HWND hwnd, double expiresAt) {
+    std::lock_guard lock(g_stateMutex);
+    for (auto& old : g_fallbackNotifications) {
+        if (old.hwnd == hwnd) {
+            old.expiresAt = expiresAt;
+            return;
+        }
+    }
+}
+
+void CleanExpiredFallbackNotifications() {
+    std::lock_guard lock(g_stateMutex);
+    double now = NowSeconds();
+    g_fallbackNotifications.erase(
+        std::remove_if(g_fallbackNotifications.begin(), g_fallbackNotifications.end(),
+                       [now](const NotificationSnapshot& n) { return now >= n.expiresAt; }),
+        g_fallbackNotifications.end());
 }
 
 float Clamp(float v, float lo, float hi) {
@@ -944,6 +1027,68 @@ bool DecodeImageBytesToPixels(const std::vector<uint8_t>& bytes, BitmapPixels* o
     return true;
 }
 
+bool DecodeImageFileToPixels(const std::wstring& filePath, BitmapPixels* outPixels) {
+    HANDLE hFile = CreateFileW(filePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE) return false;
+    DWORD size = GetFileSize(hFile, nullptr);
+    if (size == 0 || size > 10 * 1024 * 1024) { CloseHandle(hFile); return false; }
+    std::vector<uint8_t> bytes(size);
+    DWORD read = 0;
+    BOOL ok = ReadFile(hFile, bytes.data(), size, &read, nullptr);
+    CloseHandle(hFile);
+    if (!ok || read != size) return false;
+    return DecodeImageBytesToPixels(bytes, outPixels);
+}
+
+BitmapPixels TryLoadPackageLogo(const std::wstring& exePath) {
+    BitmapPixels pixels;
+    if (exePath.empty()) return pixels;
+
+    size_t lastSlash = exePath.find_last_of(L"\\/");
+    if (lastSlash == std::wstring::npos) return pixels;
+    std::wstring dir = exePath.substr(0, lastSlash);
+
+    std::vector<std::wstring> candidateSubpaths = {
+        L"\\Assets\\Square44x44Logo.targetsize-64_altform-unplated.png",
+        L"\\Assets\\Square44x44Logo.targetsize-48_altform-unplated.png",
+        L"\\Assets\\Square44x44Logo.targetsize-256.png",
+        L"\\Assets\\Square44x44Logo.png",
+        L"\\Assets\\Square150x150Logo.png",
+        L"\\Assets\\StoreLogo.png",
+        L"\\Assets\\Logo.png",
+        L"\\Square44x44Logo.targetsize-64_altform-unplated.png",
+        L"\\Square44x44Logo.png",
+        L"\\StoreLogo.png",
+        L"\\Logo.png"
+    };
+
+    for (const auto& sub : candidateSubpaths) {
+        std::wstring fullPath = dir + sub;
+        if (DecodeImageFileToPixels(fullPath, &pixels)) {
+            if (!pixels.bgra.empty()) {
+                return pixels;
+            }
+        }
+    }
+
+    WIN32_FIND_DATAW fd = {};
+    HANDLE hFind = FindFirstFileW((dir + L"\\Assets\\*logo*.png").c_str(), &fd);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            std::wstring fullPath = dir + L"\\Assets\\" + fd.cFileName;
+            if (DecodeImageFileToPixels(fullPath, &pixels)) {
+                if (!pixels.bgra.empty()) {
+                    FindClose(hFind);
+                    return pixels;
+                }
+            }
+        } while (FindNextFileW(hFind, &fd));
+        FindClose(hFind);
+    }
+
+    return pixels;
+}
+
 bool IconToPixels(HICON icon, UINT size, BitmapPixels* outPixels) {
     if (!icon || !outPixels || !size) {
         return false;
@@ -1053,6 +1198,42 @@ HICON getProcessIcon(DWORD pid) {
     std::wstring path;
     if (ProcessImageNameForPid(pid, &path) && !path.empty()) {
         HICON hIcon = nullptr;
+
+        // Ensure COM is initialized for SHCreateItemFromParsingName
+        HRESULT hrCo = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        bool coInit = SUCCEEDED(hrCo) || hrCo == RPC_E_CHANGED_MODE;
+
+        // 1. Try IShellItemImageFactory first (handles UWP/packaged apps and Win32 apps cleanly)
+        IShellItemImageFactory* pFactory = nullptr;
+        HRESULT hr = SHCreateItemFromParsingName(path.c_str(), nullptr, IID_PPV_ARGS(&pFactory));
+        if (SUCCEEDED(hr) && pFactory) {
+            SIZE sz = { 64, 64 };
+            HBITMAP hBitmap = nullptr;
+            if (SUCCEEDED(pFactory->GetImage(sz, 0x4 /* SIIGBF_ICONONLY */, &hBitmap)) && hBitmap) {
+                HBITMAP hbmMask = CreateBitmap(64, 64, 1, 1, nullptr);
+                if (hbmMask) {
+                    ICONINFO ii = {};
+                    ii.fIcon = TRUE;
+                    ii.hbmMask = hbmMask;
+                    ii.hbmColor = hBitmap;
+                    hIcon = CreateIconIndirect(&ii);
+                    DeleteObject(hbmMask);
+                }
+                DeleteObject(hBitmap);
+            }
+            pFactory->Release();
+        } else {
+            Wh_Log(L"getProcessIcon: SHCreateItemFromParsingName failed with hr=0x%08X for path '%s'", hr, path.c_str());
+        }
+
+        if (coInit) {
+            CoUninitialize();
+        }
+
+        if (hIcon) {
+            return hIcon;
+        }
+
         UINT iconId = 0;
         // Try to fetch a high-res 64x64 icon first to avoid pixelated icons
         using PrivateExtractIconsW_t = UINT(WINAPI*)(LPCWSTR, int, int, int, HICON*, UINT*, UINT, UINT);
@@ -1248,10 +1429,17 @@ BitmapPixels GetCachedProcessIconPixels(DWORD pid, UINT size) {
     }
 
     BitmapPixels pixels;
-    HICON icon = getProcessIcon(pid);
-    if (icon) {
-        IconToPixels(icon, size, &pixels);
-        DestroyIcon(icon);
+    if (exePath.find(L"\\WindowsApps\\") != std::wstring::npos || 
+        exePath.find(L"WhatsApp") != std::wstring::npos) {
+        pixels = TryLoadPackageLogo(exePath);
+    }
+
+    if (pixels.bgra.empty()) {
+        HICON icon = getProcessIcon(pid);
+        if (icon) {
+            IconToPixels(icon, size, &pixels);
+            DestroyIcon(icon);
+        }
     }
 
     if (!pixels.bgra.empty()) {
@@ -1598,8 +1786,11 @@ DWORD WINAPI MediaThreadProc(void*) {
     return 0;
 }
 
-#if DYNAMIC_ISLAND_HAS_USER_NOTIFICATION_LISTENER
 DWORD WINAPI NotificationThreadProc(void*) {
+    uint32_t lastSeenId = 0;
+    bool winrtAvailable = false;
+
+#if DYNAMIC_ISLAND_HAS_USER_NOTIFICATION_LISTENER
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
 
     using winrt::Windows::UI::Notifications::KnownNotificationBindings;
@@ -1607,145 +1798,330 @@ DWORD WINAPI NotificationThreadProc(void*) {
     using winrt::Windows::UI::Notifications::Management::UserNotificationListener;
     using winrt::Windows::UI::Notifications::Management::UserNotificationListenerAccessStatus;
 
-    uint32_t lastSeenId = 0;
-    bool accessLogged = false;
+    // --- Phase 1: Try WinRT notification listener ---
 
     try {
         auto listener = UserNotificationListener::Current();
         auto access = listener.RequestAccessAsync().get();
         if (access != UserNotificationListenerAccessStatus::Allowed) {
-            Wh_Log(L"Notification listener permission not granted; shell-hook notification fallback remains active.");
-            winrt::uninit_apartment();
-            return 0;
-        }
+            Wh_Log(L"Notification listener permission not granted; falling through to call-polling fallback.");
+        } else {
+            winrtAvailable = true;
+            std::unordered_map<std::wstring, BitmapPixels> logoCache;
 
-        std::unordered_map<std::wstring, BitmapPixels> logoCache;
-
-        while (WaitForSingleObject(g_stopEvent, 0) == WAIT_TIMEOUT) {
-            try {
-                // 1. Process programmatic dismissals
-                uint32_t toRemove = g_notifIdToRemove.exchange(0);
-                if (toRemove != 0) {
-                    try {
-                        listener.RemoveNotification(toRemove);
-                    } catch (...) {}
-                }
-
-                // 2. Fetch all active notifications
-                auto notifications = listener.GetNotificationsAsync(NotificationKinds::Toast).get();
-                std::vector<NotificationSnapshot> currentNotifications;
-                currentNotifications.reserve(notifications.Size());
-
-                for (uint32_t i = 0; i < notifications.Size(); ++i) {
-                    auto userNotification = notifications.GetAt(i);
-                    const uint32_t id = userNotification.Id();
-
-                    NotificationSnapshot item;
-                    item.winrtId = id;
-                    item.active = true;
-                    item.expiresAt = NowSeconds() + 4.0;
-                    
-                    auto appInfo = userNotification.AppInfo();
-                    auto displayInfo = appInfo.DisplayInfo();
-                    item.app = displayInfo.DisplayName().c_str();
-                    
-                    if (!item.app.empty()) {
-                        auto it = logoCache.find(item.app);
-                        if (it != logoCache.end()) {
-                            item.icon = it->second;
-                        } else {
-                            try {
-                                auto logo = displayInfo.GetLogo({32.0f, 32.0f});
-                                std::vector<uint8_t> logoBytes = ReadWinRtStreamBytes(logo);
-                                if (!logoBytes.empty()) {
-                                    DecodeImageBytesToPixels(logoBytes, &item.icon);
-                                    logoCache[item.app] = item.icon;
-                                }
-                            } catch (...) {}
-                            if (item.icon.bgra.empty()) {
-                                item.icon = FindAppIconByName(item.app, 64);
-                                if (!item.icon.bgra.empty()) {
-                                    logoCache[item.app] = item.icon;
-                                }
-                            }
-                        }
+            while (WaitForSingleObject(g_stopEvent, 0) == WAIT_TIMEOUT) {
+                try {
+                    // 1. Process programmatic dismissals
+                    uint32_t toRemove = g_notifIdToRemove.exchange(0);
+                    if (toRemove != 0) {
+                        try {
+                            listener.RemoveNotification(toRemove);
+                        } catch (...) {}
                     }
 
-                    auto notification = userNotification.Notification();
-                    auto binding = notification.Visual().GetBinding(KnownNotificationBindings::ToastGeneric());
-                    if (binding) {
-                        auto textElements = binding.GetTextElements();
-                        if (textElements.Size() > 0) {
-                            item.title = textElements.GetAt(0).Text().c_str();
-                        }
-                        if (textElements.Size() > 1) {
-                            item.body = textElements.GetAt(1).Text().c_str();
-                        }
-                    }
+                    // 2. Fetch all active notifications
+                    auto notifications = listener.GetNotificationsAsync(NotificationKinds::Toast).get();
+                    std::vector<NotificationSnapshot> currentNotifications;
+                    currentNotifications.reserve(notifications.Size());
+                    bool foundCall = false;
 
-                    if (item.title.empty()) {
-                        item.title = item.app.empty() ? L"New notification" : item.app;
-                    }
-
-                    // Check for new notifications to trigger a popup nudge
-                    if (id > lastSeenId) {
-                        NotificationSnapshot snapshot;
-                        snapshot.active = true;
-                        snapshot.winrtId = id;
-                        snapshot.expiresAt = NowSeconds() + 4.0;
-                        snapshot.app = item.app;
-                        snapshot.title = item.title;
-                        snapshot.body = item.body;
-                        snapshot.icon = item.icon;
-
-                        if (!snapshot.body.empty()) {
-                            snapshot.title += L" - " + snapshot.body;
-                        }
-                        if (snapshot.title.size() > 120) {
-                            snapshot.title.resize(120);
-                            snapshot.title += L"...";
-                        }
+                    // Check for active WhatsApp Call window directly
+                    CallEnumData callData;
+                    EnumWindows(CallEnumProc, reinterpret_cast<LPARAM>(&callData));
+                    if (callData.found) {
+                        foundCall = true;
+                        CallSnapshot call;
+                        call.active = true;
+                        call.winrtId = 0;
+                        call.hwnd = callData.hwnd;
+                        call.callerName = callData.callerName;
+                        call.callType = callData.callType;
+                        call.icon = FindAppIconByName(L"WhatsApp", 64);
+                        call.expiresAt = NowSeconds() + 25.0;
+                        call.isIncoming = callData.isIncoming;
 
                         {
                             std::lock_guard lock(g_stateMutex);
-                            g_state.notification = std::move(snapshot);
+                            if (!g_state.incomingCall.active) {
+                                g_state.incomingCall = std::move(call);
+                                if (!g_state.incomingCall.isIncoming) {
+                                    g_state.incomingCall.callStartedAt = NowSeconds();
+                                }
+                                TriggerNudge();
+                            } else {
+                                g_state.incomingCall.expiresAt = call.expiresAt;
+                                if (!g_state.incomingCall.hwnd) {
+                                    g_state.incomingCall.hwnd = call.hwnd;
+                                }
+                                if (g_state.incomingCall.callerName == L"WhatsApp" || 
+                                    g_state.incomingCall.callerName == L"WhatsApp User" ||
+                                    g_state.incomingCall.callerName.empty()) {
+                                    if (call.callerName != L"WhatsApp" && 
+                                        call.callerName != L"WhatsApp User" && 
+                                        !call.callerName.empty()) {
+                                        g_state.incomingCall.callerName = call.callerName;
+                                    }
+                                }
+                                if (g_state.incomingCall.callType.empty() || g_state.incomingCall.callType == L"Incoming Call") {
+                                    g_state.incomingCall.callType = call.callType;
+                                }
+                                if (g_state.incomingCall.isIncoming != call.isIncoming) {
+                                    g_state.incomingCall.isIncoming = call.isIncoming;
+                                    if (!call.isIncoming && g_state.incomingCall.callStartedAt == 0.0) {
+                                        g_state.incomingCall.callStartedAt = NowSeconds();
+                                    }
+                                    g_layoutDirty = true;
+                                    TriggerNudge();
+                                }
+                            }
                         }
-                        TriggerNudge();
-                        lastSeenId = id;
+                    } else {
+                        std::lock_guard lock(g_stateMutex);
+                        if (g_state.incomingCall.active) {
+                            g_state.incomingCall.active = false;
+                            TriggerNudge();
+                        }
                     }
 
-                    currentNotifications.push_back(std::move(item));
+                    for (uint32_t i = 0; i < notifications.Size(); ++i) {
+                        auto userNotification = notifications.GetAt(i);
+                        const uint32_t id = userNotification.Id();
+
+                        NotificationSnapshot item;
+                        item.winrtId = id;
+                        item.active = true;
+                        item.expiresAt = NowSeconds() + 4.0;
+                        
+                        auto appInfo = userNotification.AppInfo();
+                        auto displayInfo = appInfo.DisplayInfo();
+                        item.app = displayInfo.DisplayName().c_str();
+                        
+                        if (!item.app.empty()) {
+                            auto it = logoCache.find(item.app);
+                            if (it != logoCache.end()) {
+                                item.icon = it->second;
+                            } else {
+                                try {
+                                    auto logo = displayInfo.GetLogo({32.0f, 32.0f});
+                                    std::vector<uint8_t> logoBytes = ReadWinRtStreamBytes(logo);
+                                    if (!logoBytes.empty()) {
+                                        DecodeImageBytesToPixels(logoBytes, &item.icon);
+                                        logoCache[item.app] = item.icon;
+                                    }
+                                } catch (...) {}
+                                if (item.icon.bgra.empty()) {
+                                    item.icon = FindAppIconByName(item.app, 64);
+                                    if (!item.icon.bgra.empty()) {
+                                        logoCache[item.app] = item.icon;
+                                    }
+                                }
+                            }
+                        }
+
+                        auto notification = userNotification.Notification();
+                        auto binding = notification.Visual().GetBinding(KnownNotificationBindings::ToastGeneric());
+                        if (binding) {
+                            auto textElements = binding.GetTextElements();
+                            if (textElements.Size() > 0) {
+                                item.title = textElements.GetAt(0).Text().c_str();
+                            }
+                            if (textElements.Size() > 1) {
+                                item.body = textElements.GetAt(1).Text().c_str();
+                            }
+                        }
+
+                        if (item.title.empty()) {
+                            item.title = item.app.empty() ? L"New notification" : item.app;
+                        }
+
+                        // Check if this notification is a WhatsApp Call
+                        bool isWhatsAppCall = false;
+                        auto to_lower = [](std::wstring s) {
+                            std::wstring res;
+                            res.reserve(s.size());
+                            for (auto c : s) {
+                                res += std::tolower(static_cast<wchar_t>(c));
+                            }
+                            return res;
+                        };
+                        std::wstring lowerApp = to_lower(item.app);
+                        std::wstring lowerTitle = to_lower(item.title);
+                        std::wstring lowerBody = to_lower(item.body);
+
+                        if (lowerApp.find(L"whatsapp") != std::wstring::npos) {
+                            if (lowerTitle.find(L"call") != std::wstring::npos ||
+                                lowerBody.find(L"call") != std::wstring::npos ||
+                                lowerBody.find(L"incoming") != std::wstring::npos ||
+                                lowerTitle.find(L"incoming") != std::wstring::npos) {
+                                isWhatsAppCall = true;
+                            }
+                        }
+
+                        if (isWhatsAppCall) {
+                            foundCall = true;
+                            CallSnapshot call;
+                            call.active = true;
+                            call.winrtId = id;
+                            call.callerName = item.title;
+                            call.callType = item.body.empty() ? L"WhatsApp Call" : item.body;
+                            call.icon = item.icon;
+                            call.expiresAt = NowSeconds() + 25.0;
+
+                            {
+                                std::lock_guard lock(g_stateMutex);
+                                if (!g_state.incomingCall.active || g_state.incomingCall.callerName != call.callerName) {
+                                    g_state.incomingCall = std::move(call);
+                                    TriggerNudge();
+                                } else {
+                                    g_state.incomingCall.expiresAt = call.expiresAt;
+                                }
+                            }
+                        }
+
+                        // Check for new notifications to trigger a popup nudge
+                        if (id > lastSeenId) {
+                            NotificationSnapshot snapshot;
+                            snapshot.active = true;
+                            snapshot.winrtId = id;
+                            snapshot.expiresAt = NowSeconds() + 4.0;
+                            snapshot.app = item.app;
+                            snapshot.title = item.title;
+                            snapshot.body = item.body;
+                            snapshot.icon = item.icon;
+
+                            if (!snapshot.body.empty()) {
+                                snapshot.title += L" - " + snapshot.body;
+                            }
+                            if (snapshot.title.size() > 120) {
+                                snapshot.title.resize(120);
+                                snapshot.title += L"...";
+                            }
+
+                            {
+                                std::lock_guard lock(g_stateMutex);
+                                g_state.notification = std::move(snapshot);
+                            }
+                            TriggerNudge();
+                            lastSeenId = id;
+                        }
+
+                        currentNotifications.push_back(std::move(item));
+                    }
+
+                    if (!foundCall) {
+                        std::lock_guard lock(g_stateMutex);
+                        if (g_state.incomingCall.active) {
+                            g_state.incomingCall.active = false;
+                            TriggerNudge();
+                        }
+                    }
+
+                    // Update the global live notifications list
+                    {
+                        std::lock_guard lock(g_stateMutex);
+                        g_state.liveNotifications = std::move(currentNotifications);
+                    }
+
+                } catch (const winrt::hresult_error& ex) {
+                    const HRESULT hr = ex.to_abi();
+                    Wh_Log(L"NotificationThreadProc loop WinRT error: %s (0x%08X)", ex.message().c_str(), hr);
+                    if (hr == E_NOTIMPL || hr == E_ACCESSDENIED || hr == REGDB_E_CLASSNOTREG) {
+                        Wh_Log(L"NotificationThreadProc: Fatal/Unsupported WinRT context. Falling through to call-polling fallback.");
+                        winrtAvailable = false;
+                        break; // Exit the WinRT loop, fall into fallback below
+                    }
+                } catch (...) {
+                    Wh_Log(L"NotificationThreadProc loop unknown exception.");
                 }
 
-                // Update the global live notifications list
-                {
-                    std::lock_guard lock(g_stateMutex);
-                    g_state.liveNotifications = std::move(currentNotifications);
-                }
-
-            } catch (const winrt::hresult_error& ex) {
-                const HRESULT hr = ex.to_abi();
-                Wh_Log(L"NotificationThreadProc loop WinRT error: %s (0x%08X)", ex.message().c_str(), hr);
-                if (hr == E_NOTIMPL || hr == E_ACCESSDENIED || hr == REGDB_E_CLASSNOTREG) {
-                    Wh_Log(L"NotificationThreadProc: Fatal/Unsupported WinRT context. Exiting WinRT notification listener thread.");
-                    break;
-                }
-            } catch (...) {
-                Wh_Log(L"NotificationThreadProc loop unknown exception.");
+                WaitForSingleObject(g_stopEvent, 1000);
             }
-
-            WaitForSingleObject(g_stopEvent, 1000);
         }
     } catch (const winrt::hresult_error& ex) {
-        Wh_Log(L"NotificationThreadProc initialization WinRT error: %s (0x%08X). Falling back to shell hook.", ex.message().c_str(), ex.to_abi());
+        Wh_Log(L"NotificationThreadProc initialization WinRT error: %s (0x%08X). Falling back to call-polling.", ex.message().c_str(), ex.to_abi());
     } catch (...) {
-        Wh_Log(L"NotificationThreadProc initialization unknown exception. Falling back to shell hook.");
+        Wh_Log(L"NotificationThreadProc initialization unknown exception. Falling back to call-polling.");
+    }
+#endif
+
+    // --- Phase 2: Fallback polling loop ---
+    // If WinRT succeeded above and the loop exited due to g_stopEvent, we skip this.
+    // If WinRT failed (denied/exception), we enter this loop to keep call detection alive.
+    // Shell hook notifications via CaptureShellNotification continue independently
+    // on the render thread's message pump.
+    if (!winrtAvailable && WaitForSingleObject(g_stopEvent, 0) == WAIT_TIMEOUT) {
+        Wh_Log(L"NotificationThreadProc: Entering fallback call-polling loop.");
+        while (WaitForSingleObject(g_stopEvent, 0) == WAIT_TIMEOUT) {
+            // Scan for active WhatsApp call windows
+            CallEnumData callData;
+            EnumWindows(CallEnumProc, reinterpret_cast<LPARAM>(&callData));
+
+            if (callData.found) {
+                CallSnapshot call;
+                call.active = true;
+                call.winrtId = 0;
+                call.hwnd = callData.hwnd;
+                call.callerName = callData.callerName;
+                call.callType = callData.callType;
+                call.icon = FindAppIconByName(L"WhatsApp", 64);
+                call.expiresAt = NowSeconds() + 25.0;
+                call.isIncoming = callData.isIncoming;
+
+                {
+                    std::lock_guard lock(g_stateMutex);
+                    if (!g_state.incomingCall.active) {
+                        g_state.incomingCall = std::move(call);
+                        if (!g_state.incomingCall.isIncoming) {
+                            g_state.incomingCall.callStartedAt = NowSeconds();
+                        }
+                        TriggerNudge();
+                    } else {
+                        g_state.incomingCall.expiresAt = call.expiresAt;
+                        if (!g_state.incomingCall.hwnd) {
+                            g_state.incomingCall.hwnd = call.hwnd;
+                        }
+                        if (g_state.incomingCall.callerName == L"WhatsApp" || 
+                            g_state.incomingCall.callerName == L"WhatsApp User" ||
+                            g_state.incomingCall.callerName.empty()) {
+                            if (call.callerName != L"WhatsApp" && 
+                                call.callerName != L"WhatsApp User" && 
+                                !call.callerName.empty()) {
+                                g_state.incomingCall.callerName = call.callerName;
+                            }
+                        }
+                        if (g_state.incomingCall.callType.empty() || g_state.incomingCall.callType == L"Incoming Call") {
+                            g_state.incomingCall.callType = call.callType;
+                        }
+                        if (g_state.incomingCall.isIncoming != call.isIncoming) {
+                            g_state.incomingCall.isIncoming = call.isIncoming;
+                            if (!call.isIncoming && g_state.incomingCall.callStartedAt == 0.0) {
+                                g_state.incomingCall.callStartedAt = NowSeconds();
+                            }
+                            g_layoutDirty = true;
+                            TriggerNudge();
+                        }
+                    }
+                }
+            } else {
+                std::lock_guard lock(g_stateMutex);
+                if (g_state.incomingCall.active) {
+                    g_state.incomingCall.active = false;
+                    TriggerNudge();
+                }
+            }
+
+            // Also scan for active toast notification windows (fallback notification capture)
+            ScanForActiveToastNotifications();
+
+            WaitForSingleObject(g_stopEvent, 1000); // Poll every 1 second
+        }
     }
 
+#if DYNAMIC_ISLAND_HAS_USER_NOTIFICATION_LISTENER
     winrt::uninit_apartment();
+#endif
     return 0;
 }
-#endif
 
 float SampleAudioAmplitude(BYTE* data, UINT32 frames, WAVEFORMATEX* format) {
     if (!data || !frames || !format || !format->nChannels) {
@@ -2455,35 +2831,64 @@ bool IsLikelyToastWindow(HWND hwnd, const wchar_t* className, const wchar_t* tit
         return false;
     }
 
-    if (GetWindow(hwnd, GW_OWNER)) {
+    if (!IsWindowVisible(hwnd)) {
         return false;
     }
 
     const std::wstring cls = ToLowerCopy(className ? className : L"");
     const std::wstring text = ToLowerCopy(title ? title : L"");
 
-    // Classic Windows 10 toasts have clear class names
+    // Reject system tray, taskbar flyouts, Windhawk popups, and shell UI elements
+    if (text.find(L"system tray") != std::wstring::npos ||
+        text.find(L"overflow") != std::wstring::npos ||
+        text.find(L"popuphost") != std::wstring::npos ||
+        text.find(L"flyout") != std::wstring::npos ||
+        text.find(L"windhawk") != std::wstring::npos ||
+        text.find(L"fluentflyout") != std::wstring::npos ||
+        cls.find(L"snip") != std::wstring::npos ||
+        text == L"start" || text == L"action center" || text == L"notification center" ||
+        text == L"search" || text == L"task view" || text == L"quick settings" ||
+        text == L"control center" || text == L"date and time notification overview") {
+        return false;
+    }
+
+    // Filter out standard application main windows (they have a title bar + resize frame, and are not tool windows)
+    LONG style = GetWindowLongW(hwnd, GWL_STYLE);
+    LONG exStyle = GetWindowLongW(hwnd, GWL_EXSTYLE);
+    if ((style & WS_CAPTION) == WS_CAPTION && (style & WS_THICKFRAME) && !(exStyle & WS_EX_TOOLWINDOW)) {
+        return false;
+    }
+
+    // Classic Windows 10 toasts
     if (cls.find(L"notification") != std::wstring::npos ||
         cls.find(L"toast") != std::wstring::npos ||
         cls.find(L"windows.ui.notifications") != std::wstring::npos) {
         return true;
     }
 
-    // Windows 11 toasts use generic XAML or CoreWindow classes, usually hosted by
-    // explorer.exe, sihost.exe, or ShellExperienceHost.exe.
-    // Importantly, their title is often empty at the exact moment of creation!
-    if (cls.find(L"xaml_windowedpopupclass") != std::wstring::npos ||
-        cls.find(L"windows.ui.core.corewindow") != std::wstring::npos) {
+    // Windows 11 shell toasts (hosted by explorer.exe, sihost.exe, ShellExperienceHost.exe)
+    if (cls.find(L"xaml") != std::wstring::npos ||
+        cls.find(L"corewindow") != std::wstring::npos ||
+        cls.find(L"bridge") != std::wstring::npos ||
+        cls.find(L"inputsite") != std::wstring::npos ||
+        cls.find(L"popup") != std::wstring::npos ||
+        cls.find(L"contentwindow") != std::wstring::npos ||
+        cls.find(L"toplevelwindowforoverflowui") != std::wstring::npos) {
         
         std::wstring image;
         if (ProcessImageNameForWindow(hwnd, &image)) {
             const std::wstring base = ToLowerCopy(BaseNameFromPath(image));
-            if (base == L"explorer.exe" || base == L"sihost.exe" || base == L"shellexperiencehost.exe") {
-                // Ensure it's not the start menu, search, or action center main panel
-                if (text != L"start" && text != L"action center" && text != L"search" && text != L"task view") {
-                    return true;
-                }
+            if (base == L"explorer.exe" || base == L"sihost.exe" || 
+                base == L"shellexperiencehost.exe" || base == L"windowsshellexperiencehost.exe") {
+                return true;
             }
+        }
+    }
+
+    // Custom app toast windows (e.g. WinUI 3 toast popups created by desktop apps like WhatsApp)
+    if (cls.find(L"winuidesktopwin32windowclass") != std::wstring::npos) {
+        if ((exStyle & WS_EX_TOPMOST) || (exStyle & WS_EX_TOOLWINDOW) || !(style & WS_CAPTION)) {
+            return true;
         }
     }
 
@@ -2491,12 +2896,6 @@ bool IsLikelyToastWindow(HWND hwnd, const wchar_t* className, const wchar_t* tit
 }
 
 void CaptureShellNotification(HWND hwnd) {
-    // Grace period: ignore notifications that fire in the first 3 seconds after
-    // the mod starts. sihost.exe gets injected while system windows are still
-    // settling, which causes false positives (e.g. Snipping Tool windows).
-    if (NowSeconds() < 3.0) {
-        return;
-    }
 
     wchar_t className[128] = {};
     wchar_t title[192] = {};
@@ -2509,6 +2908,7 @@ void CaptureShellNotification(HWND hwnd) {
 
     NotificationSnapshot notification;
     notification.active = true;
+    notification.hwnd = hwnd;
     notification.app = L"Notification";
     notification.title = title;
     notification.expiresAt = NowSeconds() + 4.0;
@@ -2521,6 +2921,17 @@ void CaptureShellNotification(HWND hwnd) {
         notification.title += L"...";
     }
 
+    NotificationSnapshot immediateFallback;
+    immediateFallback.active = true;
+    immediateFallback.winrtId = 0;
+    immediateFallback.hwnd = hwnd;
+    immediateFallback.app = notification.app;
+    immediateFallback.title = notification.title;
+    immediateFallback.body = notification.body;
+    immediateFallback.icon = notification.icon;
+    immediateFallback.expiresAt = NowSeconds() + 4.0; // 4 secs, will be renewed by polling
+    AddFallbackNotification(immediateFallback);
+
     {
         std::lock_guard lock(g_stateMutex);
         g_state.notification = std::move(notification);
@@ -2530,7 +2941,6 @@ void CaptureShellNotification(HWND hwnd) {
     // Spawn a background thread to extract the full rich text body of the toast using UI Automation.
     // Modern Windows Toasts often only provide the App Name via GetWindowTextW, leaving the body hidden in the XAML tree.
     std::thread([hwnd]() {
-        Sleep(400); // Give the heavy UWP XAML tree enough time to fully construct the text nodes
         HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         if (SUCCEEDED(hr)) {
             IUIAutomation* uia = nullptr;
@@ -2542,62 +2952,135 @@ void CaptureShellNotification(HWND hwnd) {
                     uia2->put_ConnectionTimeout(500);
                     uia2->Release();
                 }
-                IUIAutomationElement* windowEl = nullptr;
-                if (SUCCEEDED(uia->ElementFromHandle(hwnd, &windowEl)) && windowEl) {
-                    IUIAutomationCondition* cond = nullptr;
-                    uia->CreateTrueCondition(&cond);
-                    IUIAutomationElementArray* elements = nullptr;
-                    if (SUCCEEDED(windowEl->FindAll(TreeScope_Descendants, cond, &elements)) && elements) {
-                        int count = 0;
-                        elements->get_Length(&count);
-                        std::wstring appName;
-                        std::wstring fullText;
-                        for (int i = 0; i < count; ++i) {
-                            IUIAutomationElement* el = nullptr;
-                            if (SUCCEEDED(elements->GetElement(i, &el)) && el) {
-                                BSTR name = nullptr;
-                                el->get_CurrentName(&name);
-                                if (name && wcslen(name) > 0) {
-                                    std::wstring chunk = name;
-                                    // Skip generic screen-reader labels often found in toasts
-                                    if (chunk != L"Notification" && chunk != L"New notification") {
-                                        if (appName.empty()) {
-                                            appName = chunk;
-                                        } else {
-                                            if (!fullText.empty()) fullText += L"  -  ";
-                                            fullText += chunk;
+
+                std::wstring appName;
+                std::wstring fullText;
+                
+                for (int attempt = 0; attempt < 10; ++attempt) {
+                    Sleep(300);
+                    
+                    IUIAutomationElement* windowEl = nullptr;
+                    if (SUCCEEDED(uia->ElementFromHandle(hwnd, &windowEl)) && windowEl) {
+                        IUIAutomationCondition* cond = nullptr;
+                        uia->CreateTrueCondition(&cond);
+                        if (cond) {
+                            IUIAutomationElementArray* elements = nullptr;
+                            if (SUCCEEDED(windowEl->FindAll(TreeScope_Descendants, cond, &elements)) && elements) {
+                                int count = 0;
+                                elements->get_Length(&count);
+                                for (int i = 0; i < count; ++i) {
+                                    IUIAutomationElement* el = nullptr;
+                                    if (SUCCEEDED(elements->GetElement(i, &el)) && el) {
+                                        BSTR name = nullptr;
+                                        el->get_CurrentName(&name);
+                                        if (!name || wcslen(name) == 0) {
+                                            if (name) SysFreeString(name);
+                                            el->get_CurrentHelpText(&name);
                                         }
+                                        if (!name || wcslen(name) == 0) {
+                                            if (name) SysFreeString(name);
+                                            el->get_CurrentItemStatus(&name);
+                                        }
+                                        
+                                        if (name && wcslen(name) > 0) {
+                                            std::wstring chunk = name;
+                                            if (chunk != L"Notification" && chunk != L"New notification") {
+                                                if (appName.empty()) {
+                                                    appName = chunk;
+                                                } else {
+                                                    if (!fullText.empty()) fullText += L"  -  ";
+                                                    fullText += chunk;
+                                                }
+                                            }
+                                        }
+                                        if (name) SysFreeString(name);
+                                        el->Release();
                                     }
                                 }
-                                if (name) SysFreeString(name);
-                                el->Release();
+                                elements->Release();
                             }
+                            cond->Release();
                         }
-                        elements->Release();
-                        
-                        if (fullText.empty() && !appName.empty()) {
-                            fullText = appName;
-                            appName = L"Notification";
-                        }
-                        
-                        if (!fullText.empty()) {
-                            std::lock_guard lock(g_stateMutex);
-                            if (g_state.notification.active) {
-                                if (!appName.empty()) {
-                                    g_state.notification.app = appName;
-                                    if (appName != L"Notification") {
-                                        BitmapPixels resolvedIcon = FindAppIconByName(appName, 64);
-                                        if (!resolvedIcon.bgra.empty()) {
-                                            g_state.notification.icon = std::move(resolvedIcon);
-                                        }
+                        windowEl->Release();
+                    }
+                    
+                    if (!appName.empty() || !fullText.empty()) {
+                        break;
+                    }
+                }
+                
+                if (fullText.empty() && !appName.empty()) {
+                    fullText = appName;
+                    appName = L"Notification";
+                }
+                
+                if (!fullText.empty()) {
+                    {
+                        std::lock_guard lock(g_stateMutex);
+                        if (g_state.notification.active) {
+                            if (!appName.empty()) {
+                                g_state.notification.app = appName;
+                                if (appName != L"Notification") {
+                                    BitmapPixels resolvedIcon = FindAppIconByName(appName, 64);
+                                    if (!resolvedIcon.bgra.empty()) {
+                                        g_state.notification.icon = std::move(resolvedIcon);
                                     }
                                 }
-                                g_state.notification.title = fullText;
                             }
+                            g_state.notification.title = fullText;
                         }
                     }
-                    if (cond) cond->Release();
-                    windowEl->Release();
+
+                    NotificationSnapshot fallbackItem;
+                    fallbackItem.active = true;
+                    fallbackItem.winrtId = 0;
+                    fallbackItem.hwnd = hwnd;
+                    fallbackItem.app = appName.empty() ? L"Notification" : appName;
+                    fallbackItem.title = fullText;
+                    size_t dash = fullText.find(L"  -  ");
+                    if (dash != std::wstring::npos) {
+                        fallbackItem.title = fullText.substr(0, dash);
+                        fallbackItem.body = fullText.substr(dash + 5);
+                    }
+                    fallbackItem.icon = g_state.notification.icon;
+                    fallbackItem.expiresAt = NowSeconds() + 4.0;
+                    AddFallbackNotification(fallbackItem);
+                    
+                    g_layoutDirty = true;
+                    TriggerNudge();
+
+                    auto to_lower = [](std::wstring s) {
+                        std::wstring res;
+                        res.reserve(s.size());
+                        for (auto c : s) {
+                            res += std::tolower(static_cast<wchar_t>(c));
+                        }
+                        return res;
+                    };
+                    std::wstring lowerApp = to_lower(appName);
+                    std::wstring lowerFull = to_lower(fullText);
+                    if (lowerApp.find(L"whatsapp") != std::wstring::npos && 
+                        (lowerFull.find(L"call") != std::wstring::npos || lowerFull.find(L"incoming") != std::wstring::npos)) {
+                        
+                        CallSnapshot call;
+                        call.active = true;
+                        call.winrtId = 0;
+                        call.callerName = appName;
+                        size_t callDash = fullText.find(L"  -  ");
+                        if (callDash != std::wstring::npos) {
+                            call.callerName = fullText.substr(0, callDash);
+                            call.callType = fullText.substr(callDash + 5);
+                        } else {
+                            call.callerName = L"WhatsApp User";
+                            call.callType = fullText;
+                        }
+                        call.icon = FindAppIconByName(L"WhatsApp", 64);
+                        if (call.icon.bgra.empty()) {
+                            call.icon = g_state.notification.icon;
+                        }
+                        call.expiresAt = NowSeconds() + 25.0;
+                        g_state.incomingCall = std::move(call);
+                    }
                 }
                 uia->Release();
             }
@@ -2677,6 +3160,7 @@ void SetClickThrough(HWND hwnd, bool clickThrough) {
     }
 
     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exStyle);
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
 
 void SendVirtualKey(WORD vk) {
@@ -3420,6 +3904,9 @@ class Renderer {
             case IslandKind::Notification:
                 DrawNotification(state, unscaledRect);
                 break;
+            case IslandKind::Call:
+                DrawCall(state, unscaledRect);
+                break;
             case IslandKind::Volume:
                 DrawVolume(state, unscaledRect);
                 break;
@@ -3751,10 +4238,14 @@ class Renderer {
     }
 
     void DrawNotificationDashboard(const SharedState& state, D2D1_RECT_F rect, const Settings& settings, double now, float scale) {
+        CleanExpiredFallbackNotifications();
         std::vector<NotificationSnapshot> list;
         {
             std::lock_guard lock(g_stateMutex);
             list = state.liveNotifications;
+            if (list.empty()) {
+                list = g_fallbackNotifications;
+            }
             if (list.empty() && state.notification.active && now < state.notification.expiresAt) {
                 list.push_back(state.notification);
             }
@@ -5202,6 +5693,104 @@ class Renderer {
         mutedBrush_->SetOpacity(0.58f);
     }
 
+    void DrawCall(const SharedState& state, D2D1_RECT_F rect) {
+        if (rect.bottom - rect.top < 48.0f || rect.right - rect.left < 120.0f) return;
+        const double now = NowSeconds();
+        const float cy = (rect.top + rect.bottom) * 0.5f;
+
+        // App logo or Caller Icon on left
+        const float iconSz = (rect.bottom - rect.top) - 16.0f;
+        D2D1_RECT_F badge = D2D1::RectF(rect.left + 14.0f, cy - iconSz * 0.5f, rect.left + 14.0f + iconSz, cy + iconSz * 0.5f);
+        const float br = iconSz * 0.35f;
+
+        ComPtr<ID2D1SolidColorBrush> plateBrush;
+        target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 0.12f), &plateBrush);
+        target_->FillRoundedRectangle(D2D1::RoundedRect(badge, br, br), plateBrush.Get());
+
+        if (!state.incomingCall.icon.bgra.empty()) {
+            DrawRoundedBitmapPixels(state.incomingCall.icon, badge, br, notificationIconBitmap_, notificationIconGeneration_, 1.0f);
+        } else {
+            ComPtr<ID2D1SolidColorBrush> phoneBg;
+            target_->CreateSolidColorBrush(D2D1::ColorF(0.10f, 0.75f, 0.35f, 1.0f), &phoneBg);
+            target_->FillRoundedRectangle(D2D1::RoundedRect(badge, br, br), phoneBg.Get());
+
+            ComPtr<ID2D1SolidColorBrush> phoneFg;
+            target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.95f), &phoneFg);
+            if (iconFormat_) {
+                iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                D2D1_RECT_F textRect = D2D1::RectF(badge.left, badge.top + (iconSz * 0.18f), badge.right, badge.bottom);
+                target_->DrawTextW(L"\uE717", 1, iconFormat_.Get(), textRect, phoneFg.Get());
+                iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            }
+        }
+
+        // Caller name and Call Type details
+        const float textLeft = rect.left + 24.0f + iconSz;
+        const float textRight = rect.right - 100.0f;
+
+        D2D1_RECT_F nameRect = D2D1::RectF(textLeft, rect.top + 14.0f, textRight, rect.top + 34.0f);
+        D2D1_RECT_F typeRect = D2D1::RectF(textLeft, rect.top + 34.0f, textRight, rect.bottom);
+
+        ComPtr<ID2D1SolidColorBrush> textBrush;
+        target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.98f), &textBrush);
+        
+        target_->DrawTextW(state.incomingCall.callerName.c_str(), static_cast<UINT32>(state.incomingCall.callerName.size()), mediaArtistFormat_.Get(), nameRect, textBrush.Get());
+
+        std::wstring subtitleText = state.incomingCall.callType;
+        if (!state.incomingCall.isIncoming) {
+            if (state.incomingCall.callStartedAt > 0.0) {
+                int elapsed = static_cast<int>(now - state.incomingCall.callStartedAt);
+                if (elapsed < 0) elapsed = 0;
+                int mins = elapsed / 60;
+                int secs = elapsed % 60;
+                wchar_t durBuf[64];
+                swprintf_s(durBuf, L"Active \u2022 %02d:%02d", mins, secs);
+                subtitleText = durBuf;
+            } else {
+                subtitleText = L"Active Call";
+            }
+            textBrush->SetColor(D2D1::ColorF(0.10f, 0.75f, 0.35f, 0.95f)); // Green color for active call status
+        } else {
+            textBrush->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.55f));
+        }
+
+        target_->DrawTextW(subtitleText.c_str(), static_cast<UINT32>(subtitleText.size()), smallTextFormat_.Get(), typeRect, textBrush.Get());
+
+        // ── Buttons on the right ──
+        const float btnSize = 32.0f;
+        const float btnY = cy - btnSize * 0.5f;
+
+        ComPtr<ID2D1SolidColorBrush> btnBg;
+        target_->CreateSolidColorBrush(D2D1::ColorF(0.10f, 0.75f, 0.35f, 0.95f), &btnBg);
+
+        ComPtr<ID2D1SolidColorBrush> btnIconBrush;
+        target_->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.95f), &btnIconBrush);
+
+        // Only draw Accept button if the call is incoming
+        if (state.incomingCall.isIncoming) {
+            D2D1_RECT_F acceptRect = D2D1::RectF(rect.right - 84.0f, btnY, rect.right - 52.0f, btnY + btnSize);
+            target_->FillRoundedRectangle(D2D1::RoundedRect(acceptRect, btnSize * 0.5f, btnSize * 0.5f), btnBg.Get());
+
+            D2D1_RECT_F acceptIconRect = D2D1::RectF(acceptRect.left, acceptRect.top + 6.0f, acceptRect.right, acceptRect.bottom);
+            if (iconFormat_) {
+                iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                target_->DrawTextW(L"\uE717", 1, iconFormat_.Get(), acceptIconRect, btnIconBrush.Get());
+                iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+            }
+        }
+
+        D2D1_RECT_F declineRect = D2D1::RectF(rect.right - 44.0f, btnY, rect.right - 12.0f, btnY + btnSize);
+        btnBg->SetColor(D2D1::ColorF(1.0f, 0.23f, 0.18f, 0.95f));
+        target_->FillRoundedRectangle(D2D1::RoundedRect(declineRect, btnSize * 0.5f, btnSize * 0.5f), btnBg.Get());
+
+        D2D1_RECT_F declineIconRect = D2D1::RectF(declineRect.left, declineRect.top + 6.0f, declineRect.right, declineRect.bottom);
+        if (iconFormat_) {
+            iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            target_->DrawTextW(L"\uE778", 1, iconFormat_.Get(), declineIconRect, btnIconBrush.Get());
+            iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+        }
+    }
+
     void DrawNotification(const SharedState& state, D2D1_RECT_F rect) {
         if (rect.bottom - rect.top < 48.0f || rect.right - rect.left < 120.0f) return;
         const double now = NowSeconds();
@@ -5703,6 +6292,10 @@ Activity ActivityForKind(IslandKind kind, const Settings& settings, const Shared
             activity.width = 240.0f;
             activity.height = 50.0f;
             break;
+        case IslandKind::Call:
+            activity.width = 360.0f;
+            activity.height = 64.0f;
+            break;
         case IslandKind::Idle:
         default:
             if (settings.autoHideIdleSeconds == -1 && !state.system.micActive && !state.system.cameraActive) {
@@ -5723,6 +6316,9 @@ Activity ActivityForKind(IslandKind kind, const Settings& settings, const Shared
 std::vector<IslandKind> ChooseActivities(const SharedState& state, const Settings& settings, double now) {
     std::vector<IslandKind> activities;
 
+    if (state.incomingCall.active && now < state.incomingCall.expiresAt) {
+        activities.push_back(IslandKind::Call);
+    }
     if (state.clipboard.active && now < state.clipboard.expiresAt) {
         activities.push_back(IslandKind::Clipboard);
     }
@@ -5864,6 +6460,366 @@ void FocusAppWindow(const std::wstring& appName) {
     }
 }
 
+BOOL CALLBACK CallEnumProc(HWND hwnd, LPARAM lParam) {
+    if (!IsWindowVisible(hwnd)) return TRUE;
+
+    LONG style = GetWindowLong(hwnd, GWL_STYLE);
+    if (style & WS_CHILD) return TRUE;
+
+    wchar_t title[256];
+    GetWindowTextW(hwnd, title, 256);
+    std::wstring wTitle(title);
+    if (wTitle.empty()) return TRUE;
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid != 0) {
+        HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (proc) {
+            wchar_t path[MAX_PATH];
+            DWORD size = MAX_PATH;
+            if (QueryFullProcessImageNameW(proc, 0, path, &size)) {
+                std::wstring wPath(path);
+                size_t slash = wPath.find_last_of(L"\\/");
+                std::wstring exeName = (slash == std::wstring::npos) ? wPath : wPath.substr(slash + 1);
+                
+                auto to_lower = [](std::wstring s) {
+                    std::wstring res;
+                    res.reserve(s.size());
+                    for (auto c : s) {
+                        res += std::tolower(static_cast<wchar_t>(c));
+                    }
+                    return res;
+                };
+
+                std::wstring lowerExe = to_lower(exeName);
+                std::wstring lowerTitle = to_lower(wTitle);
+
+                if (lowerExe.find(L"whatsapp") != std::wstring::npos) {
+                    if (lowerTitle.find(L"call") != std::wstring::npos ||
+                        lowerTitle.find(L"incoming") != std::wstring::npos ||
+                        lowerTitle.find(L"voice") != std::wstring::npos ||
+                        lowerTitle.find(L"video") != std::wstring::npos) {
+                        
+                        auto* d = reinterpret_cast<CallEnumData*>(lParam);
+                        d->found = true;
+                        d->hwnd = hwnd;
+                        
+                        std::wstring uiaCaller, uiaType;
+                        ExtractWhatsAppCallInfoUIA(hwnd, uiaCaller, uiaType, d->isIncoming);
+                        if (!uiaCaller.empty() && uiaCaller != L"WhatsApp User") {
+                            d->callerName = uiaCaller;
+                        } else {
+                            d->callerName = wTitle;
+                            size_t dash = d->callerName.find(L" - ");
+                            if (dash != std::wstring::npos) {
+                                d->callerName = d->callerName.substr(0, dash);
+                            }
+                        }
+                        
+                        if (!uiaType.empty() && uiaType != L"Incoming Call") {
+                            d->callType = uiaType;
+                        } else {
+                            d->callType = L"Incoming Call";
+                        }
+
+                        CloseHandle(proc);
+                        return FALSE; // Stop enumeration
+                    }
+                }
+            }
+            CloseHandle(proc);
+        }
+    }
+    return TRUE;
+}
+
+BOOL CALLBACK ToastScanEnumProc(HWND hwnd, LPARAM lParam) {
+    if (!IsWindowVisible(hwnd)) return TRUE;
+
+    LONG style = GetWindowLong(hwnd, GWL_STYLE);
+    if (style & WS_CHILD) return TRUE;
+
+    wchar_t className[128] = {};
+    wchar_t title[192] = {};
+    GetClassNameW(hwnd, className, ARRAYSIZE(className));
+    GetWindowTextW(hwnd, title, ARRAYSIZE(title));
+
+    if (IsLikelyToastWindow(hwnd, className, title)) {
+        auto* data = reinterpret_cast<ToastScanData*>(lParam);
+        data->toastWindows.push_back(hwnd);
+    }
+    return TRUE;
+}
+
+void ScanForActiveToastNotifications() {
+    ToastScanData data;
+    EnumWindows(ToastScanEnumProc, reinterpret_cast<LPARAM>(&data));
+
+    // Clean up processed windows that are no longer valid or no longer visible
+    g_processedToasts.erase(
+        std::remove_if(g_processedToasts.begin(), g_processedToasts.end(),
+                       [](const ProcessedToast& pt) {
+                           return !IsWindow(pt.hwnd) || !IsWindowVisible(pt.hwnd);
+                       }),
+        g_processedToasts.end());
+
+    // Process new or updated toast windows
+    for (HWND hwnd : data.toastWindows) {
+        wchar_t title[192] = {};
+        GetWindowTextW(hwnd, title, ARRAYSIZE(title));
+        std::wstring wTitle(title);
+
+        auto it = std::find_if(g_processedToasts.begin(), g_processedToasts.end(),
+                               [hwnd](const ProcessedToast& pt) { return pt.hwnd == hwnd; });
+
+        if (it == g_processedToasts.end()) {
+            ProcessedToast pt = { hwnd, wTitle };
+            g_processedToasts.push_back(pt);
+            Wh_Log(L"ScanForActiveToastNotifications: Found new active toast window %p ('%s'), capturing.", hwnd, wTitle.c_str());
+            CaptureShellNotification(hwnd);
+        } else if (it->lastTitle != wTitle) {
+            Wh_Log(L"ScanForActiveToastNotifications: Toast window %p updated title from '%s' to '%s', re-capturing.", hwnd, it->lastTitle.c_str(), wTitle.c_str());
+            it->lastTitle = wTitle;
+            CaptureShellNotification(hwnd);
+        } else {
+            // Toast is still active, just renew its expiration
+            RenewFallbackNotification(hwnd, NowSeconds() + 4.0);
+        }
+    }
+}
+
+
+bool IsIgnorableWhatsAppElement(const std::wstring& name) {
+    if (name.empty()) return true;
+
+    std::wstring lower = ToLowerCopy(name);
+
+    if (lower == L"whatsapp" ||
+        lower == L"voice call" ||
+        lower == L"video call" ||
+        lower == L"incoming call" ||
+        lower == L"incoming voice call" ||
+        lower == L"incoming video call" ||
+        lower == L"outgoing call" ||
+        lower == L"calling" ||
+        lower == L"calling..." ||
+        lower == L"accept" ||
+        lower == L"accept call" ||
+        lower == L"decline" ||
+        lower == L"decline call" ||
+        lower == L"decline\u00a0call" || // non-breaking space decline call
+        lower == L"reject" ||
+        lower == L"answer" ||
+        lower == L"end" ||
+        lower == L"hang up" ||
+        lower == L"mute" ||
+        lower == L"unmute" ||
+        lower == L"mute microphone" ||
+        lower == L"device settings" ||
+        lower == L"appwindow custom title bar" ||
+        lower == L"non client input sink window" ||
+        lower == L"camera" ||
+        lower == L"microphone" ||
+        lower == L"mic" ||
+        lower == L"speaker" ||
+        lower == L"volume" ||
+        lower == L"keypad" ||
+        lower == L"dialpad" ||
+        lower == L"minimize" ||
+        lower == L"maximize" ||
+        lower == L"close" ||
+        lower == L"restore" ||
+        lower == L"system" ||
+        lower == L"avatar" ||
+        lower == L"profile" ||
+        lower == L"image" ||
+        lower == L"picture" ||
+        lower == L"photo" ||
+        lower == L" " ||
+        lower.find(L"unread") != std::wstring::npos ||
+        lower.find(L"button") != std::wstring::npos ||
+        lower.find(L"text") != std::wstring::npos) {
+        return true;
+    }
+
+    return false;
+}
+
+void ExtractWhatsAppCallInfoUIA(HWND hwnd, std::wstring& callerName, std::wstring& callType, bool& isIncoming) {
+    callerName = L"WhatsApp User";
+    callType = L"Incoming Call";
+    isIncoming = false;
+
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    bool coInit = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
+
+    IUIAutomation* uia = nullptr;
+    hr = CoCreateInstance(__uuidof(CUIAutomation), nullptr, CLSCTX_INPROC_SERVER, __uuidof(IUIAutomation), (void**)&uia);
+    if (SUCCEEDED(hr) && uia) {
+        IUIAutomationElement* windowEl = nullptr;
+        if (SUCCEEDED(uia->ElementFromHandle(hwnd, &windowEl)) && windowEl) {
+            IUIAutomationCondition* cond = nullptr;
+            uia->CreateTrueCondition(&cond);
+            IUIAutomationElementArray* elements = nullptr;
+            if (SUCCEEDED(windowEl->FindAll(TreeScope_Descendants, cond, &elements)) && elements) {
+                int count = 0;
+                elements->get_Length(&count);
+
+                bool hasAccept = false;
+                std::vector<std::wstring> candidates;
+                for (int i = 0; i < count; ++i) {
+                    IUIAutomationElement* el = nullptr;
+                    if (SUCCEEDED(elements->GetElement(i, &el)) && el) {
+                        CONTROLTYPEID ctrlType = 0;
+                        el->get_CurrentControlType(&ctrlType);
+
+                        BSTR name = nullptr;
+                        el->get_CurrentName(&name);
+                        std::wstring wName = name ? name : L"";
+                        if (name) SysFreeString(name);
+
+                        BSTR cls = nullptr;
+                        el->get_CurrentClassName(&cls);
+                        std::wstring wCls = cls ? cls : L"";
+                        if (cls) SysFreeString(cls);
+
+                        if (!wName.empty()) {
+                            Wh_Log(L"UIA Element [%d]: ctrlType=%d class='%s' name='%s'", i, ctrlType, wCls.c_str(), wName.c_str());
+                            
+                            if (wName == L"Video call" || wName == L"Voice call" || wName == L"Incoming voice call" || wName == L"Incoming video call") {
+                                callType = wName;
+                            } else if (wName == L"Accept call" || wName == L"Accept") {
+                                hasAccept = true;
+                            } else if (!IsIgnorableWhatsAppElement(wName)) {
+                                candidates.push_back(wName);
+                            }
+                        }
+                        el->Release();
+                    }
+                }
+                elements->Release();
+
+                isIncoming = hasAccept;
+
+                if (!candidates.empty()) {
+                    callerName = candidates[0];
+                    Wh_Log(L"ExtractWhatsAppCallInfoUIA selected: callerName='%s', callType='%s', isIncoming=%d", callerName.c_str(), callType.c_str(), isIncoming);
+                } else {
+                    wchar_t title[256];
+                    GetWindowTextW(hwnd, title, 256);
+                    std::wstring wTitle(title);
+                    if (!wTitle.empty() && wTitle.find(L"WhatsApp") == std::wstring::npos) {
+                        callerName = wTitle;
+                    }
+                    Wh_Log(L"ExtractWhatsAppCallInfoUIA (fallback to title): callerName='%s', callType='%s', isIncoming=%d", callerName.c_str(), callType.c_str(), isIncoming);
+                }
+            }
+            if (cond) cond->Release();
+            windowEl->Release();
+        }
+        uia->Release();
+    }
+
+    if (coInit) {
+        CoUninitialize();
+    }
+}
+
+bool TriggerWhatsAppCallActionUIA(HWND hwnd, bool accept) {
+    bool success = false;
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    bool coInit = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
+
+    IUIAutomation* uia = nullptr;
+    hr = CoCreateInstance(__uuidof(CUIAutomation), nullptr, CLSCTX_INPROC_SERVER, __uuidof(IUIAutomation), (void**)&uia);
+    if (SUCCEEDED(hr) && uia) {
+        IUIAutomationElement* windowEl = nullptr;
+        if (SUCCEEDED(uia->ElementFromHandle(hwnd, &windowEl)) && windowEl) {
+            IUIAutomationCondition* cond = nullptr;
+            uia->CreateTrueCondition(&cond);
+            IUIAutomationElementArray* elements = nullptr;
+            if (SUCCEEDED(windowEl->FindAll(TreeScope_Descendants, cond, &elements)) && elements) {
+                int count = 0;
+                elements->get_Length(&count);
+
+                for (int i = 0; i < count; ++i) {
+                    IUIAutomationElement* el = nullptr;
+                    if (SUCCEEDED(elements->GetElement(i, &el)) && el) {
+                        BSTR name = nullptr;
+                        el->get_CurrentName(&name);
+                        std::wstring btnName = name ? name : L"";
+                        if (name) SysFreeString(name);
+
+                        if (!btnName.empty()) {
+                            std::wstring lowerBtn = ToLowerCopy(btnName);
+
+                            bool isMatch = false;
+                            if (accept) {
+                                if (lowerBtn.find(L"accept") != std::wstring::npos ||
+                                    lowerBtn.find(L"answer") != std::wstring::npos ||
+                                    lowerBtn.find(L"receive") != std::wstring::npos) {
+                                    isMatch = true;
+                                }
+                            } else {
+                                if (lowerBtn.find(L"decline") != std::wstring::npos ||
+                                    lowerBtn.find(L"reject") != std::wstring::npos ||
+                                    lowerBtn.find(L"hang") != std::wstring::npos ||
+                                    lowerBtn.find(L"end") != std::wstring::npos) {
+                                    isMatch = true;
+                                }
+                            }
+
+                            if (isMatch) {
+                                Wh_Log(L"TriggerWhatsAppCallActionUIA: Found matching button '%s', attempting invoke.", btnName.c_str());
+                                IUIAutomationInvokePattern* invokePattern = nullptr;
+                                if (SUCCEEDED(el->GetCurrentPattern(UIA_InvokePatternId, (IUnknown**)&invokePattern)) && invokePattern) {
+                                    invokePattern->Invoke();
+                                    invokePattern->Release();
+                                    success = true;
+                                    el->Release();
+                                    break;
+                                } else {
+                                    // Bounding rect fallback: click the button center
+                                    RECT rect = {};
+                                    if (SUCCEEDED(el->get_CurrentBoundingRectangle(&rect))) {
+                                        int cx = rect.left + (rect.right - rect.left) / 2;
+                                        int cy = rect.top + (rect.bottom - rect.top) / 2;
+                                        Wh_Log(L"TriggerWhatsAppCallActionUIA: Bounding rect fallback at (%d, %d)", cx, cy);
+                                        
+                                        POINT prevCursor = {};
+                                        GetCursorPos(&prevCursor);
+                                        
+                                        SetCursorPos(cx, cy);
+                                        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                                        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+                                        
+                                        SetCursorPos(prevCursor.x, prevCursor.y);
+                                        success = true;
+                                        el->Release();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        el->Release();
+                    }
+                }
+                elements->Release();
+            }
+            if (cond) cond->Release();
+            windowEl->Release();
+        }
+        uia->Release();
+    }
+
+    if (coInit) {
+        CoUninitialize();
+    }
+    return success;
+}
+
+
 LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE:
@@ -5990,8 +6946,9 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 int xPos = GET_X_LPARAM(lParam);
                 int yPos = GET_Y_LPARAM(lParam);
 
-
                 bool expanded = Wh_GetIntValue(L"PinnedExpanded", 0) != 0 || g_clickExpanded.load();
+                Wh_Log(L"OverlayWndProc: WM_LBUTTONUP xPos=%d, yPos=%d, expandOnHover=%d, expanded=%d",
+                       xPos, yPos, g_settings.expandOnHover, expanded);
                 if (!g_settings.expandOnHover && !expanded) {
                     g_clickExpanded = true;
                     g_layoutDirty = true;
@@ -6010,6 +6967,92 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 GetClientRect(hwnd, &clientRect);
                 const float height = static_cast<float>(clientRect.bottom - clientRect.top);
                 const float width = static_cast<float>(clientRect.right - clientRect.left);
+
+                // Clicks inside Call Dashboard (IslandKind::Call)
+                bool callActive = false;
+                {
+                    std::lock_guard lock(g_stateMutex);
+                    callActive = g_state.incomingCall.active && NowSeconds() < g_state.incomingCall.expiresAt;
+                }
+
+                if (callActive && !kinds.empty() && kinds[0] == IslandKind::Call) {
+                    float totalScale = (GetDpiForWindow(hwnd) / 96.0f) * g_settings.sizeScale;
+                    float cx = width / 2.0f;
+                    float cy = height / 2.0f;
+                    
+                    float unX = (xPos - cx) / totalScale;
+                    float unY = (yPos - cy) / totalScale;
+
+                    Wh_Log(L"OverlayWndProc IslandKind::Call Click: xPos=%d yPos=%d cx=%.1f cy=%.1f unX=%.1f unY=%.1f scale=%.3f",
+                           xPos, yPos, cx, cy, unX, unY, totalScale);
+
+                    if (unY >= -16.0f && unY <= 16.0f) {
+                        // Accept button (unX: 96.0f to 128.0f)
+                        if (unX >= 96.0f && unX <= 128.0f) {
+                            bool isIncoming = true;
+                            {
+                                std::lock_guard lock(g_stateMutex);
+                                isIncoming = g_state.incomingCall.isIncoming;
+                            }
+                            if (!isIncoming) return 0;
+
+                            HWND callHwnd = nullptr;
+                            {
+                                std::lock_guard lock(g_stateMutex);
+                                callHwnd = g_state.incomingCall.hwnd;
+                                g_state.incomingCall.active = false;
+                            }
+                            Wh_Log(L"OverlayWndProc: Clicked Accept button. callHwnd=%p", callHwnd);
+                            
+                            std::thread([callHwnd]() {
+                                bool uiaSuccess = false;
+                                if (callHwnd && IsWindow(callHwnd)) {
+                                    uiaSuccess = TriggerWhatsAppCallActionUIA(callHwnd, true);
+                                }
+                                if (!uiaSuccess) {
+                                    FocusAppWindow(L"WhatsApp");
+                                    Sleep(300);
+                                    keybd_event(VK_RETURN, 0, 0, 0);
+                                    keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0);
+                                }
+                            }).detach();
+                            
+                            g_layoutDirty = true;
+                            return 0;
+                        }
+                        // Decline button (unX: 136.0f to 168.0f)
+                        else if (unX >= 136.0f && unX <= 168.0f) {
+                            HWND callHwnd = nullptr;
+                            uint32_t winrtId = 0;
+                            {
+                                std::lock_guard lock(g_stateMutex);
+                                callHwnd = g_state.incomingCall.hwnd;
+                                winrtId = g_state.incomingCall.winrtId;
+                                g_state.incomingCall.active = false;
+                            }
+                            if (winrtId != 0) {
+                                g_notifIdToRemove.store(winrtId);
+                            }
+                            Wh_Log(L"OverlayWndProc: Clicked Decline button. callHwnd=%p, winrtId=%d", callHwnd, winrtId);
+                            
+                            std::thread([callHwnd]() {
+                                bool uiaSuccess = false;
+                                if (callHwnd && IsWindow(callHwnd)) {
+                                    uiaSuccess = TriggerWhatsAppCallActionUIA(callHwnd, false);
+                                }
+                                if (!uiaSuccess) {
+                                    FocusAppWindow(L"WhatsApp");
+                                    Sleep(300);
+                                    keybd_event(VK_ESCAPE, 0, 0, 0);
+                                    keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0);
+                                }
+                            }).detach();
+                            
+                            g_layoutDirty = true;
+                            return 0;
+                        }
+                    }
+                }
 
                 if (mediaActive && height > 60.0f && (g_idleTab % 4) == 0) {
                     float totalScale = (GetDpiForWindow(hwnd) / 96.0f) * g_settings.sizeScale;
@@ -6108,6 +7151,12 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             } else {
                                 std::lock_guard lock(g_stateMutex);
                                 g_state.notification.active = false;
+                                g_fallbackNotifications.erase(
+                                    std::remove_if(g_fallbackNotifications.begin(), g_fallbackNotifications.end(),
+                                                   [&item](const NotificationSnapshot& n) {
+                                                       return n.app == item.app && n.title == item.title;
+                                                   }),
+                                    g_fallbackNotifications.end());
                             }
                             g_layoutDirty = true;
                             return 0;
@@ -6180,7 +7229,19 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
     if (msg == g_shellHookMessage) {
         if (wParam == HSHELL_WINDOWCREATED) {
-            CaptureShellNotification(reinterpret_cast<HWND>(lParam));
+            HWND shellHwnd = reinterpret_cast<HWND>(lParam);
+            wchar_t dbgClass[128] = {};
+            wchar_t dbgTitle[128] = {};
+            GetClassNameW(shellHwnd, dbgClass, 128);
+            GetWindowTextW(shellHwnd, dbgTitle, 128);
+            Wh_Log(L"ShellHook HSHELL_WINDOWCREATED: hwnd=%p class='%s' title='%s'", shellHwnd, dbgClass, dbgTitle);
+            
+            // Grace period: ignore shell hook events that fire in the first 3 seconds after
+            // the mod starts. sihost.exe gets injected while system windows are still
+            // settling, which causes false positives (e.g. Snipping Tool windows).
+            if (NowSeconds() >= 3.0) {
+                CaptureShellNotification(shellHwnd);
+            }
         }
         return 0;
     }
@@ -6594,9 +7655,7 @@ bool StartThreads() {
     g_audioThread = CreateThread(nullptr, 0, AudioThreadProc, nullptr, 0, nullptr);
     g_weatherThread = CreateThread(nullptr, 0, WeatherThreadProc, nullptr, 0, nullptr);
     g_keyboardThread = CreateThread(nullptr, 0, KeyboardThreadProc, nullptr, 0, &g_keyboardThreadId);
-#if DYNAMIC_ISLAND_HAS_USER_NOTIFICATION_LISTENER
     g_notificationThread = CreateThread(nullptr, 0, NotificationThreadProc, nullptr, 0, nullptr);
-#endif
 
     return true;
 }
