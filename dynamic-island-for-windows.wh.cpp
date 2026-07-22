@@ -5975,8 +5975,11 @@ class Renderer {
                                   D2D1::Point2F(cx + 64.0f, cy));
             } else if (tab == 1) {
                 SYSTEMTIME local = {}; GetLocalTime(&local);
-                DrawCalendarDashboard(state, rect, g_settings, now, 1.0f, local);
+                DrawFlipClockDashboard(state, rect, g_settings, now, 1.0f, local);
             } else if (tab == 2) {
+                SYSTEMTIME local = {}; GetLocalTime(&local);
+                DrawCalendarDashboard(state, rect, g_settings, now, 1.0f, local);
+            } else if (tab == 3) {
                 bool hasWeather = state.weather.hasData && (now - state.weather.lastUpdated < 3600.0);
                 std::wstring wIcon = L"🌡️"; std::wstring wText = L"Loading...";
                 if (hasWeather) {
@@ -5984,9 +5987,9 @@ class Renderer {
                     GetWeatherIconAndText(state.weather.weatherCode, wIcon, wText);
                 }
                 DrawWeatherDashboard(state, rect, g_settings, now, 1.0f, hasWeather, wIcon, wText);
-            } else if (tab == 3) {
-                DrawTimerDashboard(state, rect, g_settings, now, 1.0f);
             } else if (tab == 4) {
+                DrawTimerDashboard(state, rect, g_settings, now, 1.0f);
+            } else if (tab == 5) {
                 DrawNotificationDashboard(state, rect, g_settings, now, 1.0f);
             }
 
@@ -6000,7 +6003,7 @@ class Renderer {
             }
             DrawPageDots(D2D1::RectF(rect.right - 18.0f * scale - shiftX, rect.top + 20.0f * scale,
                                      rect.right - 6.0f * scale - shiftX, rect.bottom - 20.0f * scale),
-                         tab, 5, scale);
+                         tab, 6, scale);
             const float dotX = rect.right - 10.0f * scale - shiftX;
             const float dotY = (rect.top + rect.bottom) * 0.5f;
             const float spacing = 8.0f * scale;
@@ -8070,7 +8073,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 std::lock_guard lock(g_stateMutex);
                 mediaActive = g_settings.media && g_state.media.available;
             }
-            int tabCount = mediaActive ? 5 : 4;
+            int tabCount = mediaActive ? 6 : 5;
             int delta = GET_WHEEL_DELTA_WPARAM(wParam);
             if (delta > 0) {
                 if (g_idleTab > 0) g_idleTab--;
