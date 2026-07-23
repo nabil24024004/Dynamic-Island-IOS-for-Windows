@@ -3581,6 +3581,11 @@ class Renderer {
                                          DWRITE_FONT_WEIGHT_BOLD,
                                          DWRITE_FONT_STYLE_NORMAL,
                                          DWRITE_FONT_STRETCH_NORMAL,
+                                         26.0f, L"", &timerDisplayFormat_);
+        dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr,
+                                         DWRITE_FONT_WEIGHT_BOLD,
+                                         DWRITE_FONT_STYLE_NORMAL,
+                                         DWRITE_FONT_STRETCH_NORMAL,
                                          15.5f, L"", &mediaTitleFormat_);
         dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr,
                                          DWRITE_FONT_WEIGHT_SEMI_BOLD,
@@ -3602,6 +3607,11 @@ class Renderer {
             clockFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
             clockFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
             clockFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        }
+        if (timerDisplayFormat_) {
+            timerDisplayFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+            timerDisplayFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            timerDisplayFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         }
         if (mediaTitleFormat_) {
             mediaTitleFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
@@ -3711,6 +3721,7 @@ class Renderer {
         smallTextFormat_.Reset();
         boldTextFormat_.Reset();
         hugeTextFormat_.Reset();
+        timerDisplayFormat_.Reset();
         flipClockFormat_.Reset();
         mediaTitleFormat_.Reset();
         mediaArtistFormat_.Reset();
@@ -3817,6 +3828,11 @@ class Renderer {
                                          DWRITE_FONT_WEIGHT_BOLD,
                                          DWRITE_FONT_STYLE_NORMAL,
                                          DWRITE_FONT_STRETCH_NORMAL,
+                                         26.0f * scale, L"", &timerDisplayFormat_);
+        dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr,
+                                         DWRITE_FONT_WEIGHT_BOLD,
+                                         DWRITE_FONT_STYLE_NORMAL,
+                                         DWRITE_FONT_STRETCH_NORMAL,
                                          76.0f * scale, L"", &flipClockFormat_);
         dwriteFactory_->CreateTextFormat(L"Segoe UI Variable Display", nullptr,
                                          DWRITE_FONT_WEIGHT_BOLD,
@@ -3846,6 +3862,11 @@ class Renderer {
         if (hugeTextFormat_) {
             hugeTextFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
             hugeTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        }
+        if (timerDisplayFormat_) {
+            timerDisplayFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+            timerDisplayFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            timerDisplayFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         }
         if (flipClockFormat_) {
             flipClockFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
@@ -4896,13 +4917,13 @@ class Renderer {
             wchar_t timeText[16] = {};
             swprintf_s(timeText, L"%02d:%02d", state.timer.endTime.wHour, state.timer.endTime.wMinute);
             
-            float iconSz = 14.0f;
-            float textW = 34.0f;
-            float totalW = iconSz + 6.0f + textW;
+            float iconSz = 13.0f;
+            float textW = 32.0f;
+            float totalW = iconSz + 5.0f + textW;
             float startX = cx - totalW * 0.5f;
             
             // Draw bell icon (\uE7ED in Segoe MDL2 Assets)
-            D2D1_RECT_F bellRect = D2D1::RectF(startX, rect.top + 10.0f, startX + iconSz, rect.top + 24.0f);
+            D2D1_RECT_F bellRect = D2D1::RectF(startX, cy - 36.0f, startX + iconSz, cy - 21.0f);
             if (iconFormat_) {
                 iconFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
                 iconFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
@@ -4912,29 +4933,24 @@ class Renderer {
             }
             
             // Draw end time text using smallTextFormat_
-            D2D1_RECT_F topHeaderRect = D2D1::RectF(startX + iconSz + 6.0f, rect.top + 9.0f, startX + totalW + 20.0f, rect.top + 25.0f);
+            D2D1_RECT_F topHeaderRect = D2D1::RectF(startX + iconSz + 5.0f, cy - 37.0f, startX + totalW + 20.0f, cy - 20.0f);
             if (smallTextFormat_) {
                 target_->DrawTextW(timeText, static_cast<UINT32>(wcslen(timeText)), smallTextFormat_.Get(), topHeaderRect, mutedBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
             }
 
-            // Center Main Timer Text (13:12) - Bold, 34pt
-            D2D1_RECT_F mainTimerRect = D2D1::RectF(rect.left, cy - 22.0f, rect.right, cy + 18.0f);
-            if (hugeTextFormat_) {
-                hugeTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-                hugeTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-                target_->DrawTextW(timeBuf, static_cast<UINT32>(wcslen(timeBuf)), hugeTextFormat_.Get(), mainTimerRect, textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
-                hugeTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-                hugeTextFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
-            } else if (clockFormat_) {
-                clockFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-                clockFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-                target_->DrawTextW(timeBuf, static_cast<UINT32>(wcslen(timeBuf)), clockFormat_.Get(), mainTimerRect, textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
-                clockFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
-                clockFormat_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+            // Center Main Timer Text (01:39:49 or 39:49) - Bold, 26pt
+            D2D1_RECT_F mainTimerRect = D2D1::RectF(cx - 82.0f, cy - 18.0f, cx + 82.0f, cy + 16.0f);
+            IDWriteTextFormat* fmtToUse = timerDisplayFormat_ ? timerDisplayFormat_.Get() : (hugeTextFormat_ ? hugeTextFormat_.Get() : clockFormat_.Get());
+            if (fmtToUse) {
+                fmtToUse->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+                fmtToUse->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+                target_->DrawTextW(timeBuf, static_cast<UINT32>(wcslen(timeBuf)), fmtToUse, mainTimerRect, textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+                fmtToUse->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+                fmtToUse->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
             }
 
             // Subtitle below center timer: "Timer"
-            D2D1_RECT_F subTitleRect = D2D1::RectF(rect.left, cy + 18.0f, rect.right, cy + 32.0f);
+            D2D1_RECT_F subTitleRect = D2D1::RectF(cx - 60.0f, cy + 18.0f, cx + 60.0f, cy + 34.0f);
             if (smallTextFormat_) {
                 smallTextFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
                 target_->DrawTextW(L"Timer", 5, smallTextFormat_.Get(), subTitleRect, mutedBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_CLIP);
@@ -4950,19 +4966,19 @@ class Renderer {
             float unY = (cursor.y - cy) / totalScale;
 
             const float btnY = cy;
-            const float btnR = 27.0f;
-            const float leftBtnX = cx - 96.0f;
-            const float rightBtnX = cx + 96.0f;
+            const float btnR = 25.0f;
+            const float leftBtnX = cx - 118.0f;
+            const float rightBtnX = cx + 118.0f;
 
-            bool leftHover = ((unX - (-96.0f)) * (unX - (-96.0f)) + (unY - 0.0f) * (unY - 0.0f)) <= (30.0f * 30.0f);
-            bool rightHover = ((unX - 96.0f) * (unX - 96.0f) + (unY - 0.0f) * (unY - 0.0f)) <= (30.0f * 30.0f);
+            bool leftHover = ((unX - (-118.0f)) * (unX - (-118.0f)) + (unY - 0.0f) * (unY - 0.0f)) <= (28.0f * 28.0f);
+            bool rightHover = ((unX - 118.0f) * (unX - 118.0f) + (unY - 0.0f) * (unY - 0.0f)) <= (28.0f * 28.0f);
 
             // Left Circular Button (Pause / Play)
             ComPtr<ID2D1SolidColorBrush> pauseBgBrush;
             if (leftHover) {
-                target_->CreateSolidColorBrush(D2D1::ColorF(0.28f, 0.28f, 0.32f, 1.0f * settingsOpacity_), &pauseBgBrush);
+                target_->CreateSolidColorBrush(D2D1::ColorF(0.32f, 0.32f, 0.36f, 1.0f * settingsOpacity_), &pauseBgBrush);
             } else {
-                target_->CreateSolidColorBrush(D2D1::ColorF(0.172f, 0.172f, 0.180f, 0.95f * settingsOpacity_), &pauseBgBrush);
+                target_->CreateSolidColorBrush(D2D1::ColorF(0.20f, 0.20f, 0.22f, 0.95f * settingsOpacity_), &pauseBgBrush);
             }
             target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(leftBtnX, btnY), btnR, btnR), pauseBgBrush.Get());
 
@@ -4971,19 +4987,19 @@ class Renderer {
 
             if (!state.timer.paused) {
                 // Vector rounded Pause bars ||
-                D2D1_RECT_F leftBar = D2D1::RectF(leftBtnX - 6.5f, btnY - 9.0f, leftBtnX - 2.0f, btnY + 9.0f);
-                D2D1_RECT_F rightBar = D2D1::RectF(leftBtnX + 2.0f, btnY - 9.0f, leftBtnX + 6.5f, btnY + 9.0f);
-                target_->FillRoundedRectangle(D2D1::RoundedRect(leftBar, 2.0f, 2.0f), whiteIconBrush.Get());
-                target_->FillRoundedRectangle(D2D1::RoundedRect(rightBar, 2.0f, 2.0f), whiteIconBrush.Get());
+                D2D1_RECT_F leftBar = D2D1::RectF(leftBtnX - 6.0f, btnY - 8.5f, leftBtnX - 2.0f, btnY + 8.5f);
+                D2D1_RECT_F rightBar = D2D1::RectF(leftBtnX + 2.0f, btnY - 8.5f, leftBtnX + 6.0f, btnY + 8.5f);
+                target_->FillRoundedRectangle(D2D1::RoundedRect(leftBar, 1.5f, 1.5f), whiteIconBrush.Get());
+                target_->FillRoundedRectangle(D2D1::RoundedRect(rightBar, 1.5f, 1.5f), whiteIconBrush.Get());
             } else {
                 // Vector Play triangle ▶
                 ComPtr<ID2D1PathGeometry> playGeo;
                 if (SUCCEEDED(d2dFactory_->CreatePathGeometry(&playGeo))) {
                     ComPtr<ID2D1GeometrySink> sink;
                     if (SUCCEEDED(playGeo->Open(&sink))) {
-                        sink->BeginFigure(D2D1::Point2F(leftBtnX - 5.0f, btnY - 9.0f), D2D1_FIGURE_BEGIN_FILLED);
-                        sink->AddLine(D2D1::Point2F(leftBtnX - 5.0f, btnY + 9.0f));
-                        sink->AddLine(D2D1::Point2F(leftBtnX + 8.5f, btnY));
+                        sink->BeginFigure(D2D1::Point2F(leftBtnX - 4.5f, btnY - 8.5f), D2D1_FIGURE_BEGIN_FILLED);
+                        sink->AddLine(D2D1::Point2F(leftBtnX - 4.5f, btnY + 8.5f));
+                        sink->AddLine(D2D1::Point2F(leftBtnX + 7.5f, btnY));
                         sink->EndFigure(D2D1_FIGURE_END_CLOSED);
                         sink->Close();
                         target_->FillGeometry(playGeo.Get(), whiteIconBrush.Get());
@@ -4994,9 +5010,9 @@ class Renderer {
             // Right Circular Button (Cancel 'X')
             ComPtr<ID2D1SolidColorBrush> cancelBgBrush;
             if (rightHover) {
-                target_->CreateSolidColorBrush(D2D1::ColorF(0.32f, 0.12f, 0.11f, 1.0f * settingsOpacity_), &cancelBgBrush);
+                target_->CreateSolidColorBrush(D2D1::ColorF(0.38f, 0.14f, 0.13f, 1.0f * settingsOpacity_), &cancelBgBrush);
             } else {
-                target_->CreateSolidColorBrush(D2D1::ColorF(0.227f, 0.098f, 0.090f, 0.95f * settingsOpacity_), &cancelBgBrush);
+                target_->CreateSolidColorBrush(D2D1::ColorF(0.25f, 0.10f, 0.09f, 0.95f * settingsOpacity_), &cancelBgBrush);
             }
             target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(rightBtnX, btnY), btnR, btnR), cancelBgBrush.Get());
 
@@ -5009,8 +5025,8 @@ class Renderer {
                 D2D1_LINE_JOIN_ROUND, 10.0f, D2D1_DASH_STYLE_SOLID, 0.0f);
             d2dFactory_->CreateStrokeStyle(&sp, nullptr, 0, &capStroke);
 
-            target_->DrawLine(D2D1::Point2F(rightBtnX - 7.0f, btnY - 7.0f), D2D1::Point2F(rightBtnX + 7.0f, btnY + 7.0f), brightRedBrush.Get(), 3.5f, capStroke.Get());
-            target_->DrawLine(D2D1::Point2F(rightBtnX - 7.0f, btnY + 7.0f), D2D1::Point2F(rightBtnX + 7.0f, btnY - 7.0f), brightRedBrush.Get(), 3.5f, capStroke.Get());
+            target_->DrawLine(D2D1::Point2F(rightBtnX - 6.5f, btnY - 6.5f), D2D1::Point2F(rightBtnX + 6.5f, btnY + 6.5f), brightRedBrush.Get(), 3.0f, capStroke.Get());
+            target_->DrawLine(D2D1::Point2F(rightBtnX - 6.5f, btnY + 6.5f), D2D1::Point2F(rightBtnX + 6.5f, btnY - 6.5f), brightRedBrush.Get(), 3.0f, capStroke.Get());
         }
     }
 
@@ -6993,6 +7009,7 @@ class Renderer {
     ComPtr<IDWriteTextFormat> smallTextFormat_;
     ComPtr<IDWriteTextFormat> boldTextFormat_;
     ComPtr<IDWriteTextFormat> hugeTextFormat_;
+    ComPtr<IDWriteTextFormat> timerDisplayFormat_;
     ComPtr<IDWriteTextFormat> flipClockFormat_;
     ComPtr<IDWriteTextFormat> clockFormat_;
     ComPtr<IDWriteTextFormat> iconFormat_;
@@ -7891,8 +7908,8 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     float unX = (xPos - cx) / totalScale;
                     float unY = (yPos - cy) / totalScale;
 
-                    float distLeftSq = (unX - (-96.0f)) * (unX - (-96.0f)) + (unY - 4.0f) * (unY - 4.0f);
-                    if (distLeftSq <= 36.0f * 36.0f) {
+                    float distLeftSq = (unX - (-118.0f)) * (unX - (-118.0f)) + (unY - 0.0f) * (unY - 0.0f);
+                    if (distLeftSq <= 30.0f * 30.0f) {
                         std::lock_guard lock(g_stateMutex);
                         if (g_state.timer.paused) {
                             g_state.timer.paused = false;
@@ -7904,8 +7921,8 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         g_layoutDirty = true;
                         return 0;
                     }
-                    float distRightSq = (unX - 96.0f) * (unX - 96.0f) + (unY - 4.0f) * (unY - 4.0f);
-                    if (distRightSq <= 36.0f * 36.0f) {
+                    float distRightSq = (unX - 118.0f) * (unX - 118.0f) + (unY - 0.0f) * (unY - 0.0f);
+                    if (distRightSq <= 30.0f * 30.0f) {
                         std::lock_guard lock(g_stateMutex);
                         g_state.timer.active = false;
                         g_layoutDirty = true;
